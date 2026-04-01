@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SURICATA // ALERT MONITOR</title>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@600;900&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="logo">SURICATA <span>//</span> ALERT MONITOR</div>
+  <div class="status-bar">
+    <div class="status-indicator">
+      <div class="dot" id="status-dot"></div>
+      <span id="status-text">CONNECTING...</span>
+    </div>
+    <span id="last-seen">--</span>
+  </div>
+</header>
+
+<div class="stats-row">
+  <div class="stat-cell"><div class="stat-label">Total Alerts</div><div class="stat-value" id="stat-total">0</div></div>
+  <div class="stat-cell"><div class="stat-label">Critical</div><div class="stat-value critical" id="stat-critical">0</div></div>
+  <div class="stat-cell"><div class="stat-label">High</div><div class="stat-value high" id="stat-high">0</div></div>
+  <div class="stat-cell"><div class="stat-label">Medium</div><div class="stat-value medium" id="stat-medium">0</div></div>
+  <div class="stat-cell"><div class="stat-label">Low</div><div class="stat-value low" id="stat-low">0</div></div>
+</div>
+
+<div class="controls">
+  <span class="filter-label">Filter:</span>
+  <button class="filter-btn active" data-filter="all">All</button>
+  <button class="filter-btn f-critical" data-filter="critical">Critical</button>
+  <button class="filter-btn f-high" data-filter="high">High</button>
+  <button class="filter-btn f-medium" data-filter="medium">Medium</button>
+  <button class="filter-btn f-low" data-filter="low">Low</button>
+  <div class="spacer"></div>
+  <button class="clear-btn" id="clear-btn">Clear</button>
+</div>
+
+<div class="alerts-container">
+  <div class="table-header">
+    <span>Timestamp</span><span>Severity</span><span>Source</span>
+    <span>Destination</span><span>Signature</span><span>Category</span>
+  </div>
+  <div id="alerts-list"></div>
+  <div class="empty-state" id="empty-state">
+    <div class="big">[ NO ALERTS ]</div>
+    <div class="sub">Waiting for Suricata events on eve.json...</div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
