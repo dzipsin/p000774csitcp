@@ -20,6 +20,7 @@ socket.on('alert', (data) => {
   addAlert(data);
 });
 
+// Add a new alert to the alert list
 function addAlert(a) {
   const sev = a.severity || 'low';
   stats.total++;
@@ -49,6 +50,7 @@ function updateStats() {
     statEls[key].textContent = stats[key];
 }
 
+// Filter alert list to selected severity level
 document.querySelectorAll('.filter-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     activeFilter = btn.dataset.filter;
@@ -60,9 +62,24 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
   });
 });
 
+// On page load: fetch the last 200 alerts already in the server buffer
+fetch('/api/alerts/recent?n=200')
+  .then(r => r.json())
+  .then(data => {
+    data.alerts.forEach(a => addAlert(a));
+  });
+
+// Clear button: wipe the server buffer then clear the page
 document.getElementById('clear-btn').addEventListener('click', () => {
-  list.innerHTML = '';
-  Object.keys(stats).forEach(k => stats[k] = 0);
-  updateStats();
-  empty.style.display = 'block';
+  fetch('/api/alerts/clear', { method: 'POST' }).then(() => {
+    list.innerHTML = '';
+    Object.keys(stats).forEach(k => stats[k] = 0);
+    updateStats();
+    empty.style.display = 'block';
+  });
+});
+
+// Analyse button: open the analysis endpoint as raw JSON in a new tab
+document.getElementById('analyse-btn').addEventListener('click', () => {
+  window.open('/api/analyse', '_blank');
 });

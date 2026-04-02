@@ -98,7 +98,7 @@ header {
 .filter-label { font-size: 0.7rem; letter-spacing: 0.1em; color: var(--muted); text-transform: uppercase; }
 .spacer { flex: 1; }
 
-.filter-btn, .clear-btn {
+.filter-btn, .clear-btn, .analyse-btn {
   padding: 5px 14px;
   border: 1px solid var(--border);
   background: transparent;
@@ -115,7 +115,8 @@ header {
 .filter-btn.f-high.active     { border-color: var(--high);     color: var(--high);     background: rgba(255,107,45,0.07); }
 .filter-btn.f-medium.active   { border-color: var(--medium);   color: var(--medium);   background: rgba(255,214,10,0.07); }
 .filter-btn.f-low.active      { border-color: var(--low);      color: var(--low);      background: rgba(0,212,255,0.07);  }
-.clear-btn:hover { border-color: var(--critical); color: var(--critical); }
+.clear-btn:hover   { border-color: var(--critical); color: var(--critical); }
+.analyse-btn:hover { border-color: var(--accent2); color: var(--accent2); }
 
 /* Alert table */
 .alerts-container { position: relative; z-index: 10; padding: 20px 32px; display: flex; flex-direction: column; gap: 2px; }
