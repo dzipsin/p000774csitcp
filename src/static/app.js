@@ -12,8 +12,33 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-socket.on('connect',    () => { dot.className = 'dot live'; statusTx.textContent = 'LIVE'; });
-socket.on('disconnect', () => { dot.className = 'dot dead'; statusTx.textContent = 'DISCONNECTED'; });
+let uptimeInterval = null;
+let connectedAt    = null;
+
+function formatUptime(seconds) {
+  const h = String(Math.floor(seconds / 3600)).padStart(2, '0');
+  const m = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
+  const s = String(seconds % 60).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
+socket.on('connect', () => {
+  dot.className = 'dot live';
+  statusTx.textContent = 'LIVE';
+  connectedAt = Date.now();
+  clearInterval(uptimeInterval);
+  uptimeInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - connectedAt) / 1000);
+    lastSeen.textContent = 'UP ' + formatUptime(elapsed);
+  }, 1000);
+});
+
+socket.on('disconnect', () => {
+  dot.className = 'dot dead';
+  statusTx.textContent = 'DISCONNECTED';
+  clearInterval(uptimeInterval);
+  lastSeen.textContent = '--';
+});
 
 socket.on('alert', (data) => {
   empty.style.display = 'none';
@@ -22,7 +47,7 @@ socket.on('alert', (data) => {
 
 // Add a new alert to the alert list
 function addAlert(a) {
-  const sev = a.severity || 'low';
+  const sev = a.severity_label || 'low';
   stats.total++;
   if (sev in stats) stats[sev]++;
   updateStats();
@@ -32,7 +57,7 @@ function addAlert(a) {
   if (activeFilter !== 'all' && activeFilter !== sev) row.classList.add('hidden');
 
   row.innerHTML = `
-    <div class="col-time">${esc(a.timestamp)}</div>
+    <div class="col-time">${esc(a.timestamp_display)}</div>
     <div class="col-sev"><span class="sev-badge ${sev}">${sev}</span></div>
     <div class="col-src">${esc(a.src_ip)}:${esc(a.src_port)}</div>
     <div class="col-dst">${esc(a.dst_ip)}:${esc(a.dst_port)}</div>
@@ -41,7 +66,6 @@ function addAlert(a) {
   `;
 
   list.insertBefore(row, list.firstChild);
-  lastSeen.textContent = 'LAST: ' + a.timestamp;
   if (list.children.length > 200) list.removeChild(list.lastChild);
 }
 
