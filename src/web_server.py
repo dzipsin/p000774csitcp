@@ -111,13 +111,14 @@ class Server:
 
         @app.route("/api/alerts/clear", methods=["POST"])
         def api_clear_alerts():
-            """Empty the server-side alert buffer.
+            """Empty the server-side alert buffer and notify all connected clients.
 
             Response: { "cleared": N }
             """
             with self._buffer_lock:
                 count = len(self._buffer)
                 self._buffer.clear()
+            self._socketio.emit("clear")
             return jsonify({"cleared": count})
 
         @app.route("/api/analyse", methods=["GET", "POST"])

@@ -93,14 +93,17 @@ fetch('/api/alerts/recent?n=200')
     data.alerts.forEach(a => addAlert(a));
   });
 
-// Clear button: wipe the server buffer then clear the page
+// Server broadcasts "clear" when the buffer is wiped
+socket.on('clear', () => {
+  list.innerHTML = '';
+  Object.keys(stats).forEach(k => stats[k] = 0);
+  updateStats();
+  empty.style.display = 'block';
+});
+
+// Clear button: tell the server to clear; the "clear" socket event handles the DOM
 document.getElementById('clear-btn').addEventListener('click', () => {
-  fetch('/api/alerts/clear', { method: 'POST' }).then(() => {
-    list.innerHTML = '';
-    Object.keys(stats).forEach(k => stats[k] = 0);
-    updateStats();
-    empty.style.display = 'block';
-  });
+  fetch('/api/alerts/clear', { method: 'POST' });
 });
 
 // Analyse button: open the analysis endpoint as raw JSON in a new tab
