@@ -283,10 +283,10 @@ class IncidentManager:
     # Internal: grouping
     # ------------------------------------------------------------------
 
-    def _compute_group_key(self, src_ip: str, attack_type: str) -> str:
+    def _compute_group_key(self, src_ip: str, attack_type: Optional[str]) -> str:
         """Compute the group key used to look up open incidents."""
         if self.grouping_mode == "per_attack_type":
-            return f"{src_ip}|{attack_type}"
+            return f"{src_ip}|{attack_type or ''}"
         return src_ip  # per_actor
 
     def _create_incident_locked(
