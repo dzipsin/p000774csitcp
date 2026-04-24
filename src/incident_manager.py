@@ -28,7 +28,7 @@ import logging
 import threading
 import time
 import uuid
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from log_monitor import AlertRecord
 from models import Incident, extract_attack_type
@@ -38,8 +38,9 @@ log = logging.getLogger(__name__)
 
 # Type alias for the regeneration callback: receives an Incident snapshot.
 # Implementations should be idempotent — this callback may be invoked multiple
-# times for the same incident as alerts continue to arrive.
-RegenerateCallback = Callable[[Incident], None]
+# times for the same incident as alerts continue to arrive. Return value is
+# ignored by the manager, so we accept Any (covers both None and IncidentReport).
+RegenerateCallback = Callable[[Incident], Any]
 
 
 class IncidentManager:
@@ -108,6 +109,11 @@ class IncidentManager:
 
         # Source IPs seen in the current session. Used for repeat_offender flag.
         self._seen_source_ips: set[str] = set()
+
+        # Recently-closed incidents, kept briefly so final-regeneration workers
+        # can still find them by ID. Keyed by incident_id.
+        # Entries are evicted by the sweeper to keep this bounded.
+        self._recently_closed: Dict[str, Incident] = {}
 
         # Thread-safety
         self._lock = threading.RLock()  # Reentrant because some methods call others
@@ -331,6 +337,10 @@ class IncidentManager:
         )
         self._open_incidents.pop(group_key, None)
 
+        # Keep a reference so workers doing a final regen can still find
+        # the incident by ID. Evicted later by the sweeper.
+        self._recently_closed[incident.incident_id] = incident
+
         # Cancel any pending debounce timer for this incident
         timer = self._debounce_timers.pop(incident.incident_id, None)
         if timer is not None:
@@ -510,12 +520,14 @@ class IncidentManager:
             log.exception("Shutdown regen failed for %s: %s", incident.incident_id, e)
 
     def _find_incident(self, incident_id: str) -> Optional[Incident]:
-        """Look up an incident by ID, whether open or being closed."""
+        """Look up an incident by ID, whether open or recently closed."""
         with self._lock:
+            # Check open incidents first
             for inc in self._open_incidents.values():
                 if inc.incident_id == incident_id:
                     return inc
-        return None
+            # Fall back to recently-closed cache (so final regens succeed)
+            return self._recently_closed.get(incident_id)
 
     # ------------------------------------------------------------------
     # Internal: sweeper
@@ -538,16 +550,33 @@ class IncidentManager:
             self._stop_event.wait(timeout=self.sweep_interval_seconds)
 
     def _sweep_once(self) -> None:
-        """Close any incidents whose time window has expired."""
+        """Close any incidents whose time window has expired. Also evict stale
+        recently-closed entries to bound memory."""
         now = time.time()
         expired: List[Incident] = []
 
+        # Entries older than this are removed from recently_closed.
+        # Must outlast the time needed for the final regen to complete
+        # (LLM call + storage write), plus a safety margin.
+        recently_closed_ttl = max(300.0, self.time_window_seconds * 2)
+
         with self._lock:
+            # 1. Close open incidents whose window expired
             for inc in list(self._open_incidents.values()):
                 silence = now - inc.last_activity_at
                 if silence > self.time_window_seconds:
                     expired.append(inc)
                     self._close_incident_locked(inc, final=True)
+
+            # 2. Evict stale entries from recently_closed
+            to_evict = [
+                iid for iid, inc in self._recently_closed.items()
+                if (now - inc.last_activity_at) > recently_closed_ttl
+            ]
+            for iid in to_evict:
+                self._recently_closed.pop(iid, None)
+            if to_evict:
+                log.debug("Evicted %d stale closed incidents", len(to_evict))
 
         # Trigger final regenerations outside the lock
         for inc in expired:

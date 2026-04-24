@@ -409,4 +409,6 @@ def create_provider(config: ModelConfig) -> ModelProvider:
             f"Unknown provider '{config.provider}'. "
             f"Valid options: {[p.value for p in ProviderType]}"
         )
-    return provider_class(config)
+    # _PROVIDER_MAP only contains concrete subclasses; Pylance can't narrow
+    # abstract Type[ModelProvider] here so we silence the false positive.
+    return provider_class(config)  # type: ignore[abstract]
