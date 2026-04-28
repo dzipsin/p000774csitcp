@@ -1076,6 +1076,10 @@ class ReportGenerator:
                 payload_classification=_classify_payload(alert, attack_type),
                 likely_intent=intent,
                 confidence_score=cls.confidence_score,
+                classification=cls.classification,
+                severity=cls.severity,
+                recommendation=cls.recommendation,
+                classification_status=cls.status,
             ))
 
         return results

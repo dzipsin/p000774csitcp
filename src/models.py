@@ -189,6 +189,14 @@ class AlertAnalysis:
     likely_intent: str                      # LLM-inferred goal
     confidence_score: float                 # 0.0 - 1.0, rule-based
 
+    # Stage 1 verdict mirrored here so downstream consumers (UI, evaluation)
+    # can read per-alert TP/FP labels without having to re-derive them.
+    # Default values kept for backward compatibility with existing test fixtures.
+    classification: str = ""                # "true_positive" | "likely_false_positive" | "" (error)
+    severity: str = ""                      # "Low" | "Medium" | "High" | ""
+    recommendation: str = ""                # block_source_ip | escalate_tier2 | continue_monitoring
+    classification_status: str = "complete" # complete | error
+
 
 @dataclass
 class AlertExposure:
