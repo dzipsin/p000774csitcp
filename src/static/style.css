@@ -165,9 +165,307 @@ header {
 /* Empty state */
 .empty-state     { text-align: center; padding: 80px 20px; color: var(--muted); }
 .empty-state .big { font-family: var(--head); font-size: 2rem; color: var(--border); margin-bottom: 12px; }
-.empty-state .sub { font-size: 0.8rem; letter-spacing: 0.1em; }
+.empty-state .sub { font-size: 0.8rem; letter-spacing: 0.1em; line-height: 1.8; }
 
 /* Scrollbar */
 ::-webkit-scrollbar       { width: 4px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); }
+
+
+/* ============================================================================ */
+/* STAGE C ADDITIONS — TABS + INCIDENTS                                         */
+/* Everything above this line is unchanged from the original style.css.         */
+/* ============================================================================ */
+
+/* ── Tabs ──────────────────────────────────────────────────────────── */
+.tabs {
+  position: relative; z-index: 10;
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+}
+
+.tab-btn {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 28px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.15em;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-transform: uppercase;
+  position: relative;
+}
+
+.tab-btn:hover { color: var(--text); background: rgba(0,212,255,0.05); }
+
+.tab-btn.active {
+  color: var(--accent);
+  background: var(--bg);
+}
+
+.tab-btn.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px; left: 0; right: 0;
+  height: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+}
+
+.tab-count {
+  display: inline-block;
+  padding: 2px 8px;
+  background: rgba(0,212,255,0.1);
+  border: 1px solid var(--border);
+  font-size: 0.7rem;
+  color: var(--accent);
+  min-width: 28px;
+  text-align: center;
+}
+
+.tab-btn.active .tab-count {
+  background: rgba(0,212,255,0.15);
+  border-color: var(--accent);
+}
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ── Incident filter buttons (same style family as alert filters) ── */
+.inc-filter-btn {
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem; letter-spacing: 0.08em;
+  cursor: pointer; transition: all 0.2s;
+  text-transform: uppercase;
+}
+.inc-filter-btn:hover, .inc-filter-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(0,212,255,0.07);
+}
+.inc-filter-btn.active { box-shadow: 0 0 8px rgba(0,212,255,0.2); }
+
+/* ── Incidents container ───────────────────────────────────────────── */
+.incidents-container {
+  position: relative; z-index: 10;
+  padding: 20px 32px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+/* ── Incident card ─────────────────────────────────────────────────── */
+.incident-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  padding: 16px 20px;
+  transition: all 0.25s;
+  animation: slideIn 0.3s ease;
+}
+
+.incident-card:hover { background: var(--bg3); }
+
+.incident-card.status-open    { border-left-color: var(--accent2); }
+.incident-card.status-closed  { border-left-color: var(--muted); }
+.incident-card.status-pending { border-left-color: var(--medium); opacity: 0.85; }
+.incident-card.status-error   { border-left-color: var(--critical); }
+.incident-card.hidden         { display: none; }
+
+.incident-card.severity-High    { box-shadow: inset 4px 0 0 var(--critical); }
+.incident-card.severity-Medium  { box-shadow: inset 4px 0 0 var(--high); }
+.incident-card.severity-Low     { box-shadow: inset 4px 0 0 var(--low); }
+
+/* ── Incident header row ───────────────────────────────────────────── */
+.incident-header {
+  display: flex; align-items: center; gap: 16px;
+  flex-wrap: wrap;
+  cursor: pointer;
+}
+
+.incident-id {
+  font-family: var(--head);
+  font-size: 0.85rem;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+}
+
+.incident-src {
+  color: var(--accent2);
+  font-size: 0.85rem;
+}
+
+.incident-status {
+  display: inline-block;
+  padding: 2px 10px;
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+}
+.incident-status.open    { color: var(--accent2); border-color: var(--accent2); background: rgba(0,255,157,0.08); }
+.incident-status.closed  { color: var(--muted); }
+.incident-status.pending { color: var(--medium); border-color: var(--medium); background: rgba(255,214,10,0.08); }
+.incident-status.error   { color: var(--critical); border-color: var(--critical); background: rgba(255,45,85,0.08); }
+
+.incident-meta {
+  display: flex; gap: 14px;
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+.incident-meta strong { color: var(--text); }
+
+.incident-version {
+  font-size: 0.65rem;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+}
+
+.repeat-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  font-size: 0.6rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--critical);
+  background: rgba(255,45,85,0.1);
+  border: 1px solid rgba(255,45,85,0.3);
+}
+
+.attacks-row {
+  margin-top: 10px;
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+
+.attack-chip {
+  padding: 3px 10px;
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: rgba(0,212,255,0.08);
+  color: var(--accent);
+  border: 1px solid rgba(0,212,255,0.2);
+}
+
+/* ── Toggle detail ─────────────────────────────────────────────────── */
+.incident-toggle {
+  margin-top: 12px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  padding: 4px 0;
+  text-transform: uppercase;
+}
+.incident-toggle:hover { color: var(--accent); }
+.incident-toggle::before { content: '▸ '; }
+.incident-card.expanded .incident-toggle::before { content: '▾ '; }
+
+/* ── Expanded detail ───────────────────────────────────────────────── */
+.incident-detail {
+  display: none;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  line-height: 1.7;
+}
+.incident-card.expanded .incident-detail { display: block; }
+
+.detail-section { margin-bottom: 14px; }
+.detail-section-title {
+  font-family: var(--head);
+  font-size: 0.7rem;
+  letter-spacing: 0.15em;
+  color: var(--accent2);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.detail-prose { color: var(--text); }
+
+.detail-list {
+  list-style: none;
+  padding: 0;
+}
+.detail-list li {
+  padding: 4px 0 4px 14px;
+  position: relative;
+  color: var(--text);
+}
+.detail-list li::before {
+  content: '→';
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 6px 16px;
+  margin-top: 6px;
+}
+.detail-grid dt { color: var(--muted); font-size: 0.72rem; }
+.detail-grid dd { color: var(--text); }
+
+.ioc-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ioc-item {
+  padding: 2px 8px;
+  font-size: 0.68rem;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+}
+.ioc-type {
+  color: var(--accent2);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-right: 6px;
+}
+
+/* Per-alert mini-table inside detail */
+.alert-mini-table {
+  margin-top: 6px;
+  font-size: 0.72rem;
+}
+.alert-mini-row {
+  display: grid;
+  grid-template-columns: 80px 80px 1fr 60px;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.alert-mini-row:last-child { border-bottom: none; }
+.alert-mini-type { color: var(--accent); }
+
+.gen-status-bar {
+  margin-top: 10px;
+  padding: 6px 10px;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.gen-status-bar.partial {
+  background: rgba(255,214,10,0.08);
+  color: var(--medium);
+  border: 1px solid rgba(255,214,10,0.3);
+}
+.gen-status-bar.error {
+  background: rgba(255,45,85,0.08);
+  color: var(--critical);
+  border: 1px solid rgba(255,45,85,0.3);
+}
