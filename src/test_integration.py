@@ -166,7 +166,7 @@ def test_pipeline_basic_flow():
         manager.stop(close_open=True)
         time.sleep(0.5)  # let final regen flush
 
-        print("    PASS: pipeline flowed from alert → incident → generated report → server callback")
+        print("    PASS: pipeline flowed from alert -> incident -> generated report -> server callback")
 
     finally:
         import shutil

@@ -182,7 +182,7 @@ def _synthetic_alert_for(scenario) -> AlertRecord:
 # ============================================================================
 
 def test_scenarios_fire_and_correlate():
-    print("\n=== Test 1: Synthetic fire → IncidentManager → ReportGenerator → correlate ===")
+    print("\n=== Test 1: Synthetic fire -> IncidentManager -> ReportGenerator -> correlate ===")
 
     from storage import ReportStorage
     import tempfile

@@ -436,7 +436,7 @@ def test_rule_based_cvss():
         f"Medium should map to 5.0, got {report.incident_summary.overall_cvss_estimate}"
     )
     assert report.alert_exposures[0].cvss_estimate == 5.0
-    print("    PASS: Medium severity → CVSS 5.0 for both incident and alert")
+    print("    PASS: Medium severity -> CVSS 5.0 for both incident and alert")
 
 
 def test_rule_based_iocs_and_data_fields():
@@ -475,7 +475,7 @@ def test_rule_based_data_sensitivity():
     incident = _make_incident([alert])
     report = gen.generate(incident)
     assert report.information_exposure.data_sensitive_rating == "restricted", (
-        f"Login → restricted, got {report.information_exposure.data_sensitive_rating}"
+        f"Login -> restricted, got {report.information_exposure.data_sensitive_rating}"
     )
     print("    PASS: /login classified as 'restricted'")
 
