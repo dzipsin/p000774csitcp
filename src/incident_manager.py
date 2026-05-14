@@ -285,6 +285,59 @@ class IncidentManager:
         with self._lock:
             return source_ip in self._seen_source_ips
 
+    def get_alerts_for_ip(
+        self,
+        source_ip: str,
+        since_epoch: Optional[float] = None,
+    ) -> List[AlertRecord]:
+        """Return all alerts from a source IP across open + recently-closed incidents.
+
+        Used by the agentic ReAct tools (get_alert_history) to assess prior
+        activity from an attacker IP. Reads through the public API rather than
+        accessing private state directly.
+
+        Args:
+            source_ip:    the attacker IP to filter on
+            since_epoch:  if set, only include alerts with
+                          timestamp_epoch >= since_epoch (POSIX seconds).
+                          A value of 0.0 in an alert is treated as "unknown"
+                          and is excluded from filtered results.
+
+        Returns: list of AlertRecord (may be empty). Lock-protected snapshot;
+        the caller can iterate freely.
+        """
+        out: List[AlertRecord] = []
+        with self._lock:
+            buckets: List[Incident] = []
+            buckets.extend(self._open_incidents.values())
+            buckets.extend(self._recently_closed.values())
+
+            for incident in buckets:
+                if incident.source_ip != source_ip:
+                    continue
+                for alert in incident.alerts:
+                    if since_epoch is not None:
+                        if alert.timestamp_epoch <= 0 or alert.timestamp_epoch < since_epoch:
+                            continue
+                    out.append(alert)
+        return out
+
+    def get_incident_count_for_ip(self, source_ip: str) -> int:
+        """Count of open + recently-closed incidents involving this source IP.
+
+        Used by get_alert_history tool to surface incident-level recurrence
+        distinct from raw alert volume.
+        """
+        with self._lock:
+            count = 0
+            for incident in self._open_incidents.values():
+                if incident.source_ip == source_ip:
+                    count += 1
+            for incident in self._recently_closed.values():
+                if incident.source_ip == source_ip:
+                    count += 1
+            return count
+
     # ------------------------------------------------------------------
     # Internal: grouping
     # ------------------------------------------------------------------
