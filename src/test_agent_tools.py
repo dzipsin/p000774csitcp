@@ -24,7 +24,10 @@ from typing import Any, Dict, List
 # Make src/ imports work from anywhere
 sys.path.insert(0, str(Path(__file__).parent))
 
-from agent_tools import make_alert_history_tool
+from agent_tools import (
+    make_alert_history_tool,
+    make_environment_lookup_tool,
+)
 from incident_manager import IncidentManager
 from log_monitor import AlertRecord
 
@@ -452,6 +455,220 @@ def test_history_attack_types_excludes_other() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tool tests: lookup_environment_context
+# ---------------------------------------------------------------------------
+
+def _docker_entries() -> List[Dict[str, Any]]:
+    """Reusable env_entries fixture mirroring the lab config."""
+    return [
+        {
+            "pattern": "172.18.0.2",
+            "match_type": "exact_ip",
+            "role": "internal_database",
+            "description": "MariaDB inside Docker bridge.",
+            "classification_hint": "likely_false_positive_if_internal_only",
+        },
+        {
+            "pattern": "172.18.0.0/16",
+            "match_type": "cidr",
+            "role": "docker_bridge",
+            "description": "Docker bridge subnet.",
+            "classification_hint": "context_only",
+        },
+        {
+            "pattern": "192.168.56.0/24",
+            "match_type": "cidr",
+            "role": "host_only_network",
+            "description": "VirtualBox host-only network.",
+            "classification_hint": "untrusted_source_likely_attacker",
+        },
+        {
+            "pattern": "/vulnerabilities/sqli",
+            "match_type": "url_prefix",
+            "role": "vulnerable_endpoint",
+            "description": "DVWA SQLi training endpoint.",
+            "classification_hint": "expected_attack_target",
+        },
+    ]
+
+
+def test_env_empty_entries_no_match() -> None:
+    _section("env_lookup: empty entries -> no match")
+
+    tool = make_environment_lookup_tool([])
+    result = tool.call({"query": "172.18.0.2"})
+    _assert(result.succeeded, "tool ran")
+    _assert(result.output["match_found"] is False, "no match for empty entries")
+
+
+def test_env_exact_ip_match() -> None:
+    _section("env_lookup: exact IP match")
+
+    tool = make_environment_lookup_tool(_docker_entries())
+    result = tool.call({"query": "172.18.0.2"})
+    out = result.output
+
+    _assert(result.succeeded, "tool ran")
+    _assert(out["match_found"] is True, "exact IP matched")
+    _assert(out["matched_pattern"] == "172.18.0.2", "correct pattern returned")
+    _assert(out["role"] == "internal_database", "role returned")
+    _assert(
+        out["classification_hint"] == "likely_false_positive_if_internal_only",
+        "classification hint returned",
+    )
+
+
+def test_env_exact_ip_miss() -> None:
+    _section("env_lookup: exact IP miss falls through to CIDR")
+
+    tool = make_environment_lookup_tool(_docker_entries())
+    # 172.18.0.3 is in the bridge CIDR but not an exact entry
+    result = tool.call({"query": "172.18.0.3"})
+    out = result.output
+    _assert(result.succeeded, "tool ran")
+    _assert(out["match_found"] is True, "matched CIDR after exact miss")
+    _assert(out["match_type"] == "cidr", "matched via CIDR")
+    _assert(out["matched_pattern"] == "172.18.0.0/16", "correct CIDR pattern")
+
+
+def test_env_cidr_outside_subnet() -> None:
+    _section("env_lookup: CIDR miss for IP outside all subnets")
+
+    tool = make_environment_lookup_tool(_docker_entries())
+    result = tool.call({"query": "10.0.0.99"})
+    _assert(result.succeeded, "tool ran")
+    _assert(result.output["match_found"] is False, "no match outside all subnets")
+
+
+def test_env_cidr_with_non_ip_query() -> None:
+    _section("env_lookup: CIDR with non-IP query (e.g. URL) does not crash")
+
+    tool = make_environment_lookup_tool(_docker_entries())
+    # URL string — should still try URL matchers, fail to match CIDR cleanly
+    result = tool.call({"query": "not.an.ip.string"})
+    _assert(result.succeeded, "tool ran")
+    _assert(result.output["match_found"] is False, "non-IP query produced clean miss")
+
+
+def test_env_url_prefix_match() -> None:
+    _section("env_lookup: url_prefix match")
+
+    tool = make_environment_lookup_tool(_docker_entries())
+    result = tool.call({"query": "/vulnerabilities/sqli/?id=1"})
+    out = result.output
+    _assert(result.succeeded, "tool ran")
+    _assert(out["match_found"] is True, "URL prefix matched")
+    _assert(out["match_type"] == "url_prefix", "match_type reported")
+    _assert(out["role"] == "vulnerable_endpoint", "role returned")
+
+
+def test_env_url_prefix_miss() -> None:
+    _section("env_lookup: url_prefix miss")
+
+    tool = make_environment_lookup_tool(_docker_entries())
+    result = tool.call({"query": "/login.php"})
+    _assert(result.succeeded, "tool ran")
+    _assert(result.output["match_found"] is False, "URL prefix did not match")
+
+
+def test_env_url_contains_match() -> None:
+    _section("env_lookup: url_contains match")
+
+    entries = [
+        {
+            "pattern": "/admin/",
+            "match_type": "url_contains",
+            "role": "admin_path",
+            "description": "Anywhere in URL.",
+            "classification_hint": "high_severity_target",
+        }
+    ]
+    tool = make_environment_lookup_tool(entries)
+
+    # Anywhere in the string
+    result = tool.call({"query": "/portal/admin/users?id=1"})
+    _assert(result.output["match_found"] is True, "substring matched mid-URL")
+
+
+def test_env_unknown_match_type_skipped() -> None:
+    _section("env_lookup: unknown match_type at config rejected silently")
+
+    entries = [
+        {"pattern": "x", "match_type": "regex"},   # unsupported
+        {"pattern": "1.2.3.4", "match_type": "exact_ip", "role": "ok"},
+    ]
+    tool = make_environment_lookup_tool(entries)
+    # Bad entry should be skipped; good entry still works
+    result = tool.call({"query": "1.2.3.4"})
+    _assert(result.output["match_found"] is True, "valid entry still matches")
+    _assert(result.output["role"] == "ok", "correct role from valid entry")
+
+
+def test_env_invalid_cidr_skipped() -> None:
+    _section("env_lookup: invalid CIDR rejected, other entries still work")
+
+    entries = [
+        {"pattern": "999.999.999.999/8", "match_type": "cidr"},  # invalid
+        {"pattern": "10.0.0.0/8", "match_type": "cidr", "role": "private"},
+    ]
+    tool = make_environment_lookup_tool(entries)
+    # Invalid CIDR skipped at compile time; valid one still matches
+    result = tool.call({"query": "10.5.5.5"})
+    _assert(result.output["match_found"] is True, "valid CIDR matched")
+    _assert(result.output["role"] == "private", "valid CIDR role returned")
+
+
+def test_env_first_match_wins() -> None:
+    _section("env_lookup: first matching entry wins (order matters)")
+
+    entries = [
+        {"pattern": "10.0.0.5", "match_type": "exact_ip", "role": "first"},
+        {"pattern": "10.0.0.0/8", "match_type": "cidr", "role": "second"},
+    ]
+    tool = make_environment_lookup_tool(entries)
+
+    result = tool.call({"query": "10.0.0.5"})
+    _assert(result.output["match_found"] is True, "matched")
+    _assert(result.output["role"] == "first", "exact entry won over CIDR")
+
+
+def test_env_ipv6_cidr() -> None:
+    _section("env_lookup: IPv6 CIDR")
+
+    entries = [
+        {"pattern": "2001:db8::/32", "match_type": "cidr", "role": "ipv6_doc"},
+    ]
+    tool = make_environment_lookup_tool(entries)
+
+    result = tool.call({"query": "2001:db8::1"})
+    _assert(result.output["match_found"] is True, "IPv6 CIDR matched")
+    _assert(result.output["role"] == "ipv6_doc", "IPv6 role returned")
+
+
+def test_env_empty_query() -> None:
+    _section("env_lookup: empty query is graceful no-match")
+
+    tool = make_environment_lookup_tool(_docker_entries())
+    result = tool.call({"query": "   "})  # whitespace only -> empty after strip
+    _assert(result.succeeded, "tool ran")
+    _assert(result.output["match_found"] is False, "empty query did not match")
+    _assert("reason" in result.output, "reason field present for empty")
+
+
+def test_env_missing_query_rejected() -> None:
+    _section("env_lookup: missing query rejected by validation")
+
+    tool = make_environment_lookup_tool([])
+    result = tool.call({})
+    _assert(not result.succeeded, "validation rejected")
+    _assert(
+        result.error is not None and "query" in result.error,
+        "error mentions query field",
+        result.error or "",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -471,6 +688,21 @@ def main() -> int:
         test_history_validation_clamps_hours,
         test_history_disk_read_exception_handled,
         test_history_attack_types_excludes_other,
+        # Environment lookup
+        test_env_empty_entries_no_match,
+        test_env_exact_ip_match,
+        test_env_exact_ip_miss,
+        test_env_cidr_outside_subnet,
+        test_env_cidr_with_non_ip_query,
+        test_env_url_prefix_match,
+        test_env_url_prefix_miss,
+        test_env_url_contains_match,
+        test_env_unknown_match_type_skipped,
+        test_env_invalid_cidr_skipped,
+        test_env_first_match_wins,
+        test_env_ipv6_cidr,
+        test_env_empty_query,
+        test_env_missing_query_rejected,
     ]
 
     for t in tests:

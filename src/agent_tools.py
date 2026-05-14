@@ -17,6 +17,7 @@ Public surface:
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import time
 from datetime import datetime, timezone
@@ -214,5 +215,176 @@ def make_alert_history_tool(
         name="get_alert_history",
         description=_ALERT_HISTORY_DESCRIPTION,
         parameters_schema=_ALERT_HISTORY_SCHEMA,
+        function=fn,
+    )
+
+
+# ===========================================================================
+# Tool 2: lookup_environment_context
+# ===========================================================================
+
+_ENV_LOOKUP_DESCRIPTION = (
+    "Look up known facts about an IP address, CIDR, hostname, or URL in "
+    "the lab environment. Use this when the alert involves an IP or URL "
+    "you are uncertain about, to determine if it is expected internal "
+    "infrastructure (which suggests a false positive) or untrusted "
+    "external traffic (which is more likely a real attack). Returns "
+    "match_found=false if the query is not in the known map."
+)
+
+_ENV_LOOKUP_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": (
+                "The IP address, CIDR, hostname, or URL path fragment to "
+                "look up. Examples: '172.18.0.2', '192.168.56.0/24', "
+                "'/vulnerabilities/sqli/'."
+            ),
+        },
+    },
+    "required": ["query"],
+}
+
+# Supported entry match types — anything else is rejected at compile time.
+_VALID_MATCH_TYPES = {"exact_ip", "cidr", "url_prefix", "url_contains"}
+
+
+def _compile_env_entries(
+    raw_entries: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Validate environment entries once, at factory time.
+
+    Bad entries (missing pattern, unknown match_type, malformed CIDR) are
+    logged at warning level and skipped — the tool never crashes at runtime
+    because of a config error.
+
+    For CIDR entries, the ip_network is pre-compiled and cached on the
+    entry so per-query matching is fast.
+    """
+    compiled: List[Dict[str, Any]] = []
+
+    for i, entry in enumerate(raw_entries):
+        pattern = str(entry.get("pattern", "")).strip()
+        match_type = str(entry.get("match_type", "")).strip()
+
+        if not pattern:
+            log.warning("Environment entry %d: missing pattern; skipping", i)
+            continue
+        if match_type not in _VALID_MATCH_TYPES:
+            log.warning(
+                "Environment entry %d (pattern=%r): unknown match_type %r; "
+                "skipping. Valid types: %s",
+                i, pattern, match_type, sorted(_VALID_MATCH_TYPES),
+            )
+            continue
+
+        compiled_entry: Dict[str, Any] = {
+            "pattern": pattern,
+            "match_type": match_type,
+            "role": str(entry.get("role", "")),
+            "description": str(entry.get("description", "")),
+            "classification_hint": str(entry.get("classification_hint", "")),
+        }
+
+        if match_type == "cidr":
+            try:
+                compiled_entry["_network"] = ipaddress.ip_network(
+                    pattern, strict=False,
+                )
+            except (ValueError, TypeError) as e:
+                log.warning(
+                    "Environment entry %d (pattern=%r): invalid CIDR: %s; "
+                    "skipping",
+                    i, pattern, e,
+                )
+                continue
+
+        compiled.append(compiled_entry)
+
+    return compiled
+
+
+def _env_entry_matches(entry: Dict[str, Any], query: str) -> bool:
+    """Test whether a single compiled entry matches the query string."""
+    match_type = entry["match_type"]
+    pattern = entry["pattern"]
+
+    if match_type == "exact_ip":
+        return query == pattern
+
+    if match_type == "cidr":
+        net = entry.get("_network")
+        if net is None:
+            return False
+        try:
+            return ipaddress.ip_address(query) in net
+        except (ValueError, TypeError):
+            # Query isn't a parseable IP — not a CIDR match.
+            return False
+
+    if match_type == "url_prefix":
+        return query.startswith(pattern)
+
+    if match_type == "url_contains":
+        return pattern in query
+
+    # Unknown match type was rejected at compile; shouldn't reach here.
+    return False
+
+
+def make_environment_lookup_tool(
+    env_entries: List[Dict[str, Any]],
+) -> ToolDefinition:
+    """Build the lookup_environment_context ToolDefinition.
+
+    Args:
+        env_entries: list of entry dicts from app.config under
+                     [[agent.environment.entries]]. Each entry should have
+                     at minimum 'pattern' and 'match_type' (one of:
+                     exact_ip, cidr, url_prefix, url_contains).
+                     Optional: 'role', 'description', 'classification_hint'.
+
+                     Bad entries are logged + skipped at factory time. The
+                     tool itself always returns a structured response and
+                     never raises.
+    """
+    compiled = _compile_env_entries(env_entries or [])
+
+    if env_entries and not compiled:
+        log.warning(
+            "Environment lookup tool: all %d configured entries were "
+            "rejected. Tool will always return match_found=false.",
+            len(env_entries),
+        )
+
+    def fn(args: Dict[str, Any]) -> Dict[str, Any]:
+        query = str(args["query"]).strip()
+        if not query:
+            return {
+                "query": query,
+                "match_found": False,
+                "reason": "empty query",
+            }
+
+        for entry in compiled:
+            if _env_entry_matches(entry, query):
+                return {
+                    "query": query,
+                    "match_found": True,
+                    "matched_pattern": entry["pattern"],
+                    "match_type": entry["match_type"],
+                    "role": entry["role"],
+                    "description": entry["description"],
+                    "classification_hint": entry["classification_hint"],
+                }
+
+        return {"query": query, "match_found": False}
+
+    return ToolDefinition(
+        name="lookup_environment_context",
+        description=_ENV_LOOKUP_DESCRIPTION,
+        parameters_schema=_ENV_LOOKUP_SCHEMA,
         function=fn,
     )
