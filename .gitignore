@@ -209,3 +209,9 @@ __marimo__/
 reports/
 # Phase 4 evaluation outputs
 eval_results/
+
+# Claude Code session files (settings, hooks, agent definitions, transcripts)
+.claude/
+# Temp files generated for commit message construction
+.commit_msg.tmp
+*.commit_msg.tmp
