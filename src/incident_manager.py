@@ -338,6 +338,24 @@ class IncidentManager:
                     count += 1
             return count
 
+    def get_all_incidents(self) -> List[Incident]:
+        """Snapshot of all in-memory incidents: open + recently-closed.
+
+        Used by the agentic ReAct tools (get_attack_pattern_stats) to
+        aggregate across both currently-open incidents and incidents that
+        have closed within the current session but are still cached in
+        memory for final regeneration.
+
+        Returns a list; the caller can iterate freely. Alert lists inside
+        each Incident remain shared references, but Incidents themselves
+        are append-only via add_alert() so concurrent iteration is safe
+        for read-only purposes.
+        """
+        with self._lock:
+            out = list(self._open_incidents.values())
+            out.extend(self._recently_closed.values())
+            return out
+
     # ------------------------------------------------------------------
     # Internal: grouping
     # ------------------------------------------------------------------

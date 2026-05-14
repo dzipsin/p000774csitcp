@@ -388,3 +388,193 @@ def make_environment_lookup_tool(
         parameters_schema=_ENV_LOOKUP_SCHEMA,
         function=fn,
     )
+
+
+# ===========================================================================
+# Tool 3: get_attack_pattern_stats
+# ===========================================================================
+
+_PATTERN_STATS_DESCRIPTION = (
+    "Get aggregate statistics for a specific attack type over a recent "
+    "time window. Use this when you want to gauge whether an attack type "
+    "is currently active in the environment, which helps calibrate "
+    "severity. Returns alert volume, unique source IPs, incident count, "
+    "and (when classification history is available on disk) the observed "
+    "true-positive rate."
+)
+
+# Must match the enum used by extract_attack_type() in models.py.
+_VALID_ATTACK_TYPES = [
+    "SQLi",
+    "XSS",
+    "CommandInjection",
+    "PathTraversal",
+    "CSRF",
+    "FileInclusion",
+    "BruteForce",
+    "Reconnaissance",
+    "WebAttack",
+]
+
+_PATTERN_STATS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "attack_type": {
+            "type": "string",
+            "description": (
+                "The attack type label to aggregate over. Must match the "
+                "extract_attack_type() taxonomy."
+            ),
+            "enum": _VALID_ATTACK_TYPES,
+        },
+        "hours": {
+            "type": "integer",
+            "description": (
+                "Lookback window in hours. Default 24. Maximum 168 (1 week)."
+            ),
+            "default": 24,
+            "minimum": 1,
+            "maximum": 168,
+        },
+    },
+    "required": ["attack_type"],
+}
+
+
+def _aggregate_pattern_stats(
+    attack_type: str,
+    hours: int,
+    incident_manager: Any,
+    storage: Any,
+) -> Dict[str, Any]:
+    """Aggregate volume + classification stats for one attack type.
+
+    Combines in-memory incidents with persisted disk reports. Deduplicates
+    by incident_id so an incident persisted to disk while still in memory
+    is counted once.
+
+    true_positive_rate is computed only from disk-side classifications
+    (in-memory alerts have not yet been classified). Documented circularity:
+    the rate reflects past LLM verdicts, not ground truth. Useful as
+    relative signal, not absolute accuracy.
+    """
+    now = time.time()
+    since = now - (hours * 3600.0)
+
+    total_alerts = 0
+    unique_ips: set = set()
+    incident_ids_seen: set = set()
+    most_recent_ts = 0.0
+
+    classified_total = 0
+    tp_total = 0
+
+    # --- In-memory side ---
+    in_memory_incidents = incident_manager.get_all_incidents()
+    for incident in in_memory_incidents:
+        for alert in incident.alerts:
+            if extract_attack_type(alert.signature) != attack_type:
+                continue
+            ts = alert.timestamp_epoch
+            if ts <= 0 or ts < since:
+                continue
+            total_alerts += 1
+            unique_ips.add(alert.src_ip)
+            incident_ids_seen.add(incident.incident_id)
+            if ts > most_recent_ts:
+                most_recent_ts = ts
+
+    # --- Disk side, dedup'd by incident_id ---
+    try:
+        for report in storage.list_reports():
+            summary = report.get("incident_summary", {}) or {}
+            incident_id = summary.get("incident_id", "")
+
+            disk_alerts = report.get("alerts", []) or []
+            disk_analyses = report.get("alert_analyses", []) or []
+
+            # If we already counted this incident in memory, skip its alerts
+            # but still inspect analyses for TPR (analyses persist whether
+            # or not the incident is still in memory).
+            already_in_memory = incident_id in incident_ids_seen
+
+            for i, raw_alert in enumerate(disk_alerts):
+                sig = str(raw_alert.get("signature", ""))
+                if extract_attack_type(sig) != attack_type:
+                    continue
+                try:
+                    ts = float(raw_alert.get("timestamp_epoch", 0) or 0)
+                except (TypeError, ValueError):
+                    ts = 0.0
+                if ts <= 0 or ts < since:
+                    continue
+
+                # Volume metrics only count once
+                if not already_in_memory:
+                    total_alerts += 1
+                    unique_ips.add(str(raw_alert.get("src_ip", "")))
+                    incident_ids_seen.add(incident_id)
+                    if ts > most_recent_ts:
+                        most_recent_ts = ts
+
+                # Classification metrics always count (disk-only signal)
+                if i < len(disk_analyses):
+                    cls = str(disk_analyses[i].get("classification", ""))
+                    if cls in ("true_positive", "likely_false_positive"):
+                        classified_total += 1
+                        if cls == "true_positive":
+                            tp_total += 1
+    except Exception as e:  # noqa: BLE001 — defensive boundary
+        log.warning("get_attack_pattern_stats: disk read failed: %s", e)
+
+    tpr: Any = None
+    if classified_total > 0:
+        tpr = round(tp_total / classified_total, 3)
+
+    return {
+        "attack_type": attack_type,
+        "lookback_hours": hours,
+        "total_alerts": total_alerts,
+        "unique_source_ips": len(unique_ips),
+        "incident_count": len(incident_ids_seen),
+        "observed_true_positive_rate": tpr,
+        "most_recent_alert_iso": (
+            datetime.fromtimestamp(most_recent_ts, tz=timezone.utc).isoformat()
+            if most_recent_ts > 0 else None
+        ),
+    }
+
+
+def make_pattern_stats_tool(
+    incident_manager: Any,
+    storage: Any,
+) -> ToolDefinition:
+    """Build the get_attack_pattern_stats ToolDefinition.
+
+    Args:
+        incident_manager: must expose get_all_incidents() returning a list
+                          of Incident objects (open + recently-closed).
+        storage:          must expose list_reports(). May be None — in that
+                          case observed_true_positive_rate is always None
+                          and disk-side counts are skipped.
+    """
+    class _NullStorage:
+        def list_reports(self):
+            return []
+
+    storage_or_null = storage if storage is not None else _NullStorage()
+
+    def fn(args: Dict[str, Any]) -> Dict[str, Any]:
+        return _aggregate_pattern_stats(
+            attack_type=args["attack_type"],
+            hours=int(args.get("hours", 24)),
+            incident_manager=incident_manager,
+            storage=storage_or_null,
+        )
+
+    return ToolDefinition(
+        name="get_attack_pattern_stats",
+        description=_PATTERN_STATS_DESCRIPTION,
+        parameters_schema=_PATTERN_STATS_SCHEMA,
+        function=fn,
+    )

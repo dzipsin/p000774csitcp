@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from agent_tools import (
     make_alert_history_tool,
     make_environment_lookup_tool,
+    make_pattern_stats_tool,
 )
 from incident_manager import IncidentManager
 from log_monitor import AlertRecord
@@ -184,6 +185,21 @@ def test_get_incident_count_for_ip() -> None:
     _assert(mgr.get_incident_count_for_ip("10.0.0.1") == 1, "10.0.0.1 has 1 open incident")
     _assert(mgr.get_incident_count_for_ip("10.0.0.2") == 1, "10.0.0.2 has 1 open incident")
     _assert(mgr.get_incident_count_for_ip("10.0.0.99") == 0, "unknown IP returns 0")
+
+
+def test_get_all_incidents() -> None:
+    _section("IncidentManager.get_all_incidents: open + recently_closed snapshot")
+
+    mgr = _new_manager()
+    _assert(len(mgr.get_all_incidents()) == 0, "empty before any alerts")
+
+    mgr.process_alert(_make_alert("10.0.0.1"))
+    mgr.process_alert(_make_alert("10.0.0.2"))
+
+    all_incs = mgr.get_all_incidents()
+    _assert(len(all_incs) == 2, "two open incidents visible", str(len(all_incs)))
+    ips = {inc.source_ip for inc in all_incs}
+    _assert(ips == {"10.0.0.1", "10.0.0.2"}, "both source IPs present")
 
 
 # ---------------------------------------------------------------------------
@@ -669,6 +685,233 @@ def test_env_missing_query_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tool tests: get_attack_pattern_stats
+# ---------------------------------------------------------------------------
+
+def test_stats_empty_returns_zeros() -> None:
+    _section("pattern_stats: empty everywhere -> zeros, null TPR")
+
+    mgr = _new_manager()
+    storage = _FakeStorage([])
+    tool = make_pattern_stats_tool(mgr, storage)
+
+    result = tool.call({"attack_type": "SQLi"})
+    _assert(result.succeeded, "tool ran", result.error or "")
+
+    out = result.output
+    _assert(out["attack_type"] == "SQLi", "echoes attack_type")
+    _assert(out["total_alerts"] == 0, "no alerts")
+    _assert(out["unique_source_ips"] == 0, "no IPs")
+    _assert(out["incident_count"] == 0, "no incidents")
+    _assert(out["observed_true_positive_rate"] is None, "TPR null with no data")
+    _assert(out["most_recent_alert_iso"] is None, "no recent timestamp")
+    _assert(out["lookback_hours"] == 24, "default lookback")
+
+
+def test_stats_in_memory_matching_type() -> None:
+    _section("pattern_stats: in-memory alerts of matching attack type")
+
+    mgr = _new_manager()
+    mgr.process_alert(_make_alert("10.0.0.1", signature="SQL Injection"))
+    mgr.process_alert(_make_alert("10.0.0.1", signature="SQL Injection"))
+    mgr.process_alert(_make_alert("10.0.0.2", signature="UNION SELECT SQL Injection"))
+
+    storage = _FakeStorage([])
+    tool = make_pattern_stats_tool(mgr, storage)
+    result = tool.call({"attack_type": "SQLi"})
+    out = result.output
+
+    _assert(out["total_alerts"] == 3, "3 SQLi alerts counted", str(out))
+    _assert(out["unique_source_ips"] == 2, "2 unique IPs")
+    _assert(out["incident_count"] == 2, "2 incidents")
+    _assert(out["observed_true_positive_rate"] is None, "no TPR from in-memory only")
+    _assert(out["most_recent_alert_iso"] is not None, "recent timestamp recorded")
+
+
+def test_stats_non_matching_type_excluded() -> None:
+    _section("pattern_stats: non-matching attack types excluded")
+
+    mgr = _new_manager()
+    mgr.process_alert(_make_alert("10.0.0.1", signature="SQL Injection"))
+    mgr.process_alert(_make_alert("10.0.0.2", signature="XSS Cross Site Scripting"))
+
+    tool = make_pattern_stats_tool(mgr, _FakeStorage([]))
+
+    # Querying SQLi should not pick up XSS
+    sqli = tool.call({"attack_type": "SQLi"}).output
+    _assert(sqli["total_alerts"] == 1, "only SQLi counted", str(sqli))
+    _assert(sqli["unique_source_ips"] == 1, "only one IP for SQLi")
+
+    # Querying XSS should not pick up SQLi
+    xss = tool.call({"attack_type": "XSS"}).output
+    _assert(xss["total_alerts"] == 1, "only XSS counted")
+
+
+def test_stats_disk_classifications_compute_tpr() -> None:
+    _section("pattern_stats: disk classifications compute true-positive rate")
+
+    mgr = _new_manager()
+
+    # Disk-only report with 3 SQLi alerts: 2 TP, 1 FP
+    now_epoch = time.time()
+    report = {
+        "incident_summary": {
+            "incident_id": "inc-disk-1",
+            "source_ip": "10.0.0.5",
+            "total_alerts": 3,
+            "generated_at": "2026-05-15T10:00:00+00:00",
+        },
+        "alerts": [
+            {
+                "timestamp_epoch": now_epoch - 600,
+                "signature": "SQL Injection",
+                "src_ip": "10.0.0.5",
+            },
+            {
+                "timestamp_epoch": now_epoch - 500,
+                "signature": "UNION SELECT SQL Injection",
+                "src_ip": "10.0.0.5",
+            },
+            {
+                "timestamp_epoch": now_epoch - 400,
+                "signature": "SQL Injection",
+                "src_ip": "10.0.0.5",
+            },
+        ],
+        "alert_analyses": [
+            {"alert_id": "a1", "classification": "true_positive"},
+            {"alert_id": "a2", "classification": "true_positive"},
+            {"alert_id": "a3", "classification": "likely_false_positive"},
+        ],
+    }
+    storage = _FakeStorage([report])
+
+    tool = make_pattern_stats_tool(mgr, storage)
+    out = tool.call({"attack_type": "SQLi"}).output
+
+    _assert(out["total_alerts"] == 3, "3 disk SQLi alerts counted", str(out))
+    _assert(
+        out["observed_true_positive_rate"] == round(2 / 3, 3),
+        "TPR = 2/3 from 2 TP + 1 FP",
+        str(out["observed_true_positive_rate"]),
+    )
+
+
+def test_stats_dedup_by_incident_id() -> None:
+    _section("pattern_stats: in-memory + disk same incident_id is counted once")
+
+    mgr = _new_manager()
+    mgr.process_alert(_make_alert("10.0.0.7", signature="SQL Injection"))
+    inc_id = mgr.get_open_incidents()[0].incident_id
+
+    now_epoch = time.time()
+    # Disk report for SAME incident_id — should not double-count volume
+    report = {
+        "incident_summary": {
+            "incident_id": inc_id,
+            "source_ip": "10.0.0.7",
+            "total_alerts": 1,
+            "generated_at": "2026-05-15T10:00:00+00:00",
+        },
+        "alerts": [
+            {
+                "timestamp_epoch": now_epoch - 30,
+                "signature": "SQL Injection",
+                "src_ip": "10.0.0.7",
+            },
+        ],
+        "alert_analyses": [
+            {"alert_id": "a1", "classification": "true_positive"},
+        ],
+    }
+    storage = _FakeStorage([report])
+    tool = make_pattern_stats_tool(mgr, storage)
+
+    out = tool.call({"attack_type": "SQLi"}).output
+
+    # Volume counted once
+    _assert(out["total_alerts"] == 1, "alert counted once across in-mem + disk")
+    _assert(out["incident_count"] == 1, "incident counted once")
+    # But TPR is computed from disk classifications regardless
+    _assert(
+        out["observed_true_positive_rate"] == 1.0,
+        "TPR = 1.0 from single TP classification",
+        str(out["observed_true_positive_rate"]),
+    )
+
+
+def test_stats_time_filter() -> None:
+    _section("pattern_stats: time window filter excludes old alerts")
+
+    mgr = _new_manager()
+    now = time.time()
+    mgr.process_alert(_make_alert("10.0.0.1", timestamp_epoch=now - 7200,
+                                  signature="SQL Injection"))  # 2h ago
+    mgr.process_alert(_make_alert("10.0.0.1", timestamp_epoch=now - 60,
+                                  signature="SQL Injection"))  # 1m ago
+
+    tool = make_pattern_stats_tool(mgr, _FakeStorage([]))
+
+    # 30-min window: only recent
+    out = tool.call({"attack_type": "SQLi", "hours": 1}).output
+    _assert(out["total_alerts"] == 1, "only recent alert in 1-hour window")
+    _assert(out["lookback_hours"] == 1, "hours passed through")
+
+
+def test_stats_invalid_attack_type_rejected() -> None:
+    _section("pattern_stats: invalid attack_type rejected by enum")
+
+    tool = make_pattern_stats_tool(_new_manager(), _FakeStorage([]))
+    result = tool.call({"attack_type": "NotARealType"})
+    _assert(not result.succeeded, "validation rejected")
+    _assert(
+        result.error is not None and "NotARealType" in result.error,
+        "error mentions invalid value",
+        result.error or "",
+    )
+
+
+def test_stats_hours_range_enforced() -> None:
+    _section("pattern_stats: hours range enforced")
+
+    tool = make_pattern_stats_tool(_new_manager(), _FakeStorage([]))
+
+    r1 = tool.call({"attack_type": "SQLi", "hours": 0})
+    _assert(not r1.succeeded, "hours=0 rejected")
+
+    r2 = tool.call({"attack_type": "SQLi", "hours": 200})
+    _assert(not r2.succeeded, "hours=200 rejected (>168)")
+
+
+def test_stats_null_storage() -> None:
+    _section("pattern_stats: None storage works, no TPR")
+
+    mgr = _new_manager()
+    mgr.process_alert(_make_alert("10.0.0.1", signature="XSS"))
+    tool = make_pattern_stats_tool(mgr, storage=None)
+
+    out = tool.call({"attack_type": "XSS"}).output
+    _assert(out["total_alerts"] == 1, "in-memory XSS counted")
+    _assert(out["observed_true_positive_rate"] is None, "TPR null without storage")
+
+
+def test_stats_broken_storage_graceful() -> None:
+    _section("pattern_stats: storage exception is non-fatal")
+
+    class _BrokenStorage:
+        def list_reports(self):
+            raise RuntimeError("disk on fire")
+
+    mgr = _new_manager()
+    mgr.process_alert(_make_alert("10.0.0.1", signature="SQL Injection"))
+    tool = make_pattern_stats_tool(mgr, storage=_BrokenStorage())
+
+    out = tool.call({"attack_type": "SQLi"}).output
+    _assert(out["total_alerts"] == 1, "in-memory still counted")
+    _assert(out["observed_true_positive_rate"] is None, "no TPR when disk failed")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -677,6 +920,7 @@ def main() -> int:
         test_get_alerts_for_ip_filters_by_ip,
         test_get_alerts_for_ip_filters_by_time,
         test_get_incident_count_for_ip,
+        test_get_all_incidents,
         test_history_empty_returns_zero_defaults,
         test_history_in_memory_only,
         test_history_disk_only,
@@ -703,6 +947,17 @@ def main() -> int:
         test_env_ipv6_cidr,
         test_env_empty_query,
         test_env_missing_query_rejected,
+        # Attack pattern stats
+        test_stats_empty_returns_zeros,
+        test_stats_in_memory_matching_type,
+        test_stats_non_matching_type_excluded,
+        test_stats_disk_classifications_compute_tpr,
+        test_stats_dedup_by_incident_id,
+        test_stats_time_filter,
+        test_stats_invalid_attack_type_rejected,
+        test_stats_hours_range_enforced,
+        test_stats_null_storage,
+        test_stats_broken_storage_graceful,
     ]
 
     for t in tests:
