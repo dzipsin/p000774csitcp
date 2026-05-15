@@ -20,11 +20,16 @@ Configuration:
 
 from __future__ import annotations
 
+import json as _json
+import logging
 import os
+import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Dict, Optional, Type
+
+log = logging.getLogger(__name__)
 
 
 class ProviderType(str, Enum):
@@ -95,10 +100,39 @@ class ModelProvider(ABC):
             RuntimeError if the backend returns an error or is unreachable.
         """
 
+    def complete_json(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """Send *prompt* and request JSON-formatted output.
+
+        Args:
+            prompt: The user prompt.
+            system_prompt: Optional system prompt for this specific call.
+                           Does NOT mutate the provider's default config.
+
+        Default implementation falls back to complete(). Providers that
+        support native JSON mode (e.g. Ollama) override this for
+        more reliable structured output.
+
+        Raises:
+            RuntimeError if the backend returns an error or is unreachable.
+        """
+        full_prompt = prompt
+        if system_prompt:
+            full_prompt = f"{system_prompt}\n\n{prompt}"
+        return self.complete(full_prompt)
+
     @property
     @abstractmethod
     def provider_type(self) -> ProviderType:
         """The ProviderType this instance represents."""
+
+    @property
+    @abstractmethod
+    def model_name(self) -> str:
+        """The model identifier string (e.g. 'llama3.2', 'claude-sonnet-4-6')."""
 
 
 class AnthropicProvider(ModelProvider):
@@ -118,22 +152,24 @@ class AnthropicProvider(ModelProvider):
                 "AnthropicProvider requires an API key. "
                 "Set API_KEY or pass api_key in ModelConfig."
             )
+        try:
+            import anthropic  # type: ignore[import-not-found]
+        except ImportError as e:
+            raise RuntimeError(
+                "anthropic package not installed. Run: pip install anthropic"
+            ) from e
+        self._client = anthropic.Anthropic(api_key=config.api_key)
 
     @property
     def provider_type(self) -> ProviderType:
         return ProviderType.ANTHROPIC
 
+    @property
+    def model_name(self) -> str:
+        return self._config.model
+
     def complete(self, prompt: str) -> str:
-        try:
-            import anthropic
-        except ImportError as e:
-            raise RuntimeError(
-                "anthropic package not installed. Run: pip install anthropic"
-            ) from e
-
         cfg = self._config
-        client = anthropic.Anthropic(api_key=cfg.api_key)
-
         kwargs: dict = dict(
             model=cfg.model,
             max_tokens=cfg.max_tokens,
@@ -144,7 +180,27 @@ class AnthropicProvider(ModelProvider):
         if cfg.temperature is not None:
             kwargs["temperature"] = cfg.temperature
 
-        message = client.messages.create(**kwargs)
+        message = self._client.messages.create(**kwargs)
+        return message.content[0].text
+
+    def complete_json(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        cfg = self._config
+        kwargs: dict = dict(
+            model=cfg.model,
+            max_tokens=cfg.max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        sys_prompt = system_prompt or cfg.system_prompt
+        if sys_prompt:
+            kwargs["system"] = sys_prompt
+        if cfg.temperature is not None:
+            kwargs["temperature"] = cfg.temperature
+
+        message = self._client.messages.create(**kwargs)
         return message.content[0].text
 
 
@@ -170,20 +226,33 @@ class OllamaProvider(ModelProvider):
     def provider_type(self) -> ProviderType:
         return ProviderType.OLLAMA
 
-    def complete(self, prompt: str) -> str:
-        try:
-            import urllib.request
-            import json as _json
-        except ImportError as e:
-            raise RuntimeError("urllib is unavailable (unexpected).") from e
+    @property
+    def model_name(self) -> str:
+        return self._config.model
 
+    def _call_ollama(
+        self,
+        prompt: str,
+        json_mode: bool = False,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """Internal method that handles both text and JSON mode requests.
+
+        Args:
+            prompt: The user prompt.
+            json_mode: If True, set Ollama's format to "json".
+            system_prompt: If provided, used as the system message for this
+                           call only. Does not mutate config.
+        """
         cfg = self._config
         messages = []
-        if cfg.system_prompt:
-            messages.append({"role": "system", "content": cfg.system_prompt})
+
+        sys = system_prompt if system_prompt is not None else cfg.system_prompt
+        if sys:
+            messages.append({"role": "system", "content": sys})
         messages.append({"role": "user", "content": prompt})
 
-        payload = _json.dumps({
+        payload: dict = {
             "model": cfg.model,
             "messages": messages,
             "stream": False,
@@ -191,15 +260,22 @@ class OllamaProvider(ModelProvider):
                 "temperature": cfg.temperature,
                 "num_predict": cfg.max_tokens,
             },
-        }).encode()
+        }
 
+        if json_mode:
+            payload["format"] = "json"
+
+        data = _json.dumps(payload).encode()
         url = f"{self._base}/api/chat"
         req = urllib.request.Request(
             url,
-            data=payload,
+            data=data,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+
+        log.debug("Ollama request to %s (json_mode=%s)", url, json_mode)
+
         try:
             with urllib.request.urlopen(req, timeout=cfg.request_timeout) as resp:
                 body = _json.loads(resp.read())
@@ -210,6 +286,19 @@ class OllamaProvider(ModelProvider):
             return body["message"]["content"]
         except (KeyError, TypeError) as e:
             raise RuntimeError(f"Unexpected Ollama response: {body}") from e
+
+    def complete(self, prompt: str) -> str:
+        return self._call_ollama(prompt, json_mode=False)
+
+    def complete_json(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """Use Ollama's native JSON mode for reliable structured output."""
+        return self._call_ollama(
+            prompt, json_mode=True, system_prompt=system_prompt,
+        )
 
 
 class LlamaCppProvider(ModelProvider):
@@ -234,29 +323,39 @@ class LlamaCppProvider(ModelProvider):
     def provider_type(self) -> ProviderType:
         return ProviderType.LLAMACPP
 
-    def complete(self, prompt: str) -> str:
-        try:
-            import urllib.request
-            import json as _json
-        except ImportError as e:
-            raise RuntimeError("urllib is unavailable (unexpected).") from e
+    @property
+    def model_name(self) -> str:
+        return self._config.model
 
+    def _call_llamacpp(
+        self,
+        prompt: str,
+        json_mode: bool = False,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """Internal method that handles both text and JSON mode requests."""
         cfg = self._config
-        full_prompt = prompt
-        if cfg.system_prompt:
-            full_prompt = f"{cfg.system_prompt}\n\n{prompt}"
 
-        payload = _json.dumps({
+        sys = system_prompt if system_prompt is not None else cfg.system_prompt
+        full_prompt = prompt
+        if sys:
+            full_prompt = f"{sys}\n\n{prompt}"
+
+        payload: dict = {
             "prompt": full_prompt,
             "n_predict": cfg.max_tokens,
             "temperature": cfg.temperature,
             "stop": [],
-        }).encode()
+        }
 
+        if json_mode:
+            payload["json_schema"] = {"type": "object"}
+
+        data = _json.dumps(payload).encode()
         url = f"{self._base}/completion"
         req = urllib.request.Request(
             url,
-            data=payload,
+            data=data,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -271,8 +370,21 @@ class LlamaCppProvider(ModelProvider):
         except (KeyError, TypeError) as e:
             raise RuntimeError(f"Unexpected llama.cpp response shape: {body}") from e
 
+    def complete(self, prompt: str) -> str:
+        return self._call_llamacpp(prompt, json_mode=False)
 
-_PROVIDER_MAP: dict[ProviderType, type[ModelProvider]] = {
+    def complete_json(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+    ) -> str:
+        """Use llama.cpp's JSON schema mode for structured output."""
+        return self._call_llamacpp(
+            prompt, json_mode=True, system_prompt=system_prompt,
+        )
+
+
+_PROVIDER_MAP: Dict[ProviderType, Type[ModelProvider]] = {
     ProviderType.ANTHROPIC: AnthropicProvider,
     ProviderType.OLLAMA:    OllamaProvider,
     ProviderType.LLAMACPP:  LlamaCppProvider,
@@ -297,4 +409,6 @@ def create_provider(config: ModelConfig) -> ModelProvider:
             f"Unknown provider '{config.provider}'. "
             f"Valid options: {[p.value for p in ProviderType]}"
         )
-    return provider_class(config)
+    # _PROVIDER_MAP only contains concrete subclasses; Pylance can't narrow
+    # abstract Type[ModelProvider] here so we silence the false positive.
+    return provider_class(config)  # type: ignore[abstract]
