@@ -626,6 +626,8 @@ class ReportGenerator:
         max_retries: int = 1,
         is_repeat_offender: Optional[Callable[[str], bool]] = None,
         on_report_ready: Optional[Callable[[IncidentReport], None]] = None,
+        agent_mode: str = "single_shot",
+        react_agent: Optional[object] = None,
     ):
         """
         Args:
@@ -636,12 +638,31 @@ class ReportGenerator:
             max_retries: retries per LLM call on parse/validation failures
             is_repeat_offender: callable(source_ip) -> bool for repeat flag
             on_report_ready: callable(IncidentReport) -> None called after save
+            agent_mode: "single_shot" (default) keeps original behavior.
+                        "react" delegates per-alert classification to react_agent.
+            react_agent: a ReActAgent instance. Required when agent_mode='react'.
+                         Typed as `object` here to avoid an import-time
+                         dependency on react_agent (which in turn imports
+                         from report_generator). The duck-type contract is
+                         react_agent.classify(alert) -> AlertClassification.
         """
         if summary_mode not in ("llm", "template"):
             log.warning(
                 "Invalid summary_mode '%s', defaulting to 'template'", summary_mode,
             )
             summary_mode = "template"
+
+        if agent_mode not in ("single_shot", "react"):
+            log.warning(
+                "Invalid agent_mode '%s', defaulting to 'single_shot'", agent_mode,
+            )
+            agent_mode = "single_shot"
+        if agent_mode == "react" and react_agent is None:
+            log.warning(
+                "agent_mode='react' but no react_agent supplied — "
+                "falling back to single_shot",
+            )
+            agent_mode = "single_shot"
 
         self._provider = provider
         self._storage = storage
@@ -651,11 +672,15 @@ class ReportGenerator:
         self._is_repeat_offender = is_repeat_offender or (lambda _: False)
         self._on_report_ready = on_report_ready
 
+        self._agent_mode = agent_mode
+        self._react_agent = react_agent
+
         self._stage1_system_prompt = _build_stage1_system_prompt(include_lab_context)
 
         log.info(
-            "ReportGenerator ready: lab_context=%s, summary_mode=%s, retries=%d",
-            include_lab_context, summary_mode, max_retries,
+            "ReportGenerator ready: agent_mode=%s, lab_context=%s, "
+            "summary_mode=%s, retries=%d",
+            agent_mode, include_lab_context, summary_mode, max_retries,
         )
 
     # ------------------------------------------------------------------
@@ -830,6 +855,26 @@ class ReportGenerator:
         return results
 
     def _classify_single(self, alert: AlertRecord) -> AlertClassification:
+        """Classify a single alert.
+
+        Dispatches based on agent_mode:
+          - "react"       -> ReActAgent.classify(alert) which runs the tool-using
+                             loop; produces an AlertClassification with
+                             reasoning_trace populated.
+          - "single_shot" -> existing path (kept verbatim under
+                             _classify_single_singleshot). Used as the baseline
+                             for evaluation and as the fallback inside ReActAgent
+                             itself.
+        """
+        if self._agent_mode == "react" and self._react_agent is not None:
+            cls = self._react_agent.classify(alert)
+            # ReActAgent doesn't populate confidence_score (it lives on the
+            # report-generator rule layer). Fill it in now.
+            cls.confidence_score = _confidence_score(alert, cls)
+            return cls
+        return self._classify_single_singleshot(alert)
+
+    def _classify_single_singleshot(self, alert: AlertRecord) -> AlertClassification:
         """Classify a single alert with retry on parse/validation failure."""
         alert_id = str(alert.flow_id) if alert.flow_id else str(uuid.uuid4())
         attack_type = extract_attack_type(alert.signature)

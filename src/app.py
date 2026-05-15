@@ -118,6 +118,33 @@ MAX_RETRIES         = int(_analysis_cfg.get("max_retries", 1))
 
 
 # ---------------------------------------------------------------------------
+# Agent config (Phase 4 — agentic ReAct loop)
+# ---------------------------------------------------------------------------
+
+_agent_cfg              = _cfg.get("agent", {})
+AGENT_MODE              = str(_agent_cfg.get("mode", "single_shot")).lower()
+AGENT_MAX_ITERATIONS    = int(_agent_cfg.get("max_iterations", 3))
+AGENT_TOOL_TIMEOUT      = float(_agent_cfg.get("tool_timeout_seconds", 5.0))
+AGENT_TOTAL_BUDGET      = float(_agent_cfg.get("total_budget_seconds", 30.0))
+AGENT_TRACE_ENABLED     = bool(_agent_cfg.get("reasoning_trace_enabled", True))
+
+_agent_tools_cfg        = _agent_cfg.get("tools", {})
+AGENT_TOOLS_ENABLED     = {
+    "get_alert_history":         bool(_agent_tools_cfg.get("get_alert_history", True)),
+    "lookup_environment_context": bool(_agent_tools_cfg.get("lookup_environment_context", True)),
+    "get_attack_pattern_stats":  bool(_agent_tools_cfg.get("get_attack_pattern_stats", True)),
+}
+
+# Environment lookup entries — list of dicts from [[agent.environment.entries]]
+_agent_env_cfg          = _agent_cfg.get("environment", {})
+AGENT_ENV_ENTRIES       = list(_agent_env_cfg.get("entries", []))
+
+if AGENT_MODE not in ("single_shot", "react"):
+    log.warning("Invalid agent.mode '%s' — defaulting to 'single_shot'", AGENT_MODE)
+    AGENT_MODE = "single_shot"
+
+
+# ---------------------------------------------------------------------------
 # Model config
 # ---------------------------------------------------------------------------
 
@@ -193,6 +220,57 @@ try:
     )
     server.set_analyser(analyser)
 
+    # Build the ReActAgent if requested. Done in a try-block so a misconfigured
+    # tool registry doesn't block the rest of the pipeline — single-shot
+    # fallback keeps the system useful.
+    react_agent = None
+    if AGENT_MODE == "react":
+        try:
+            from tool_registry import ToolRegistry
+            from agent_tools import (
+                make_alert_history_tool,
+                make_environment_lookup_tool,
+                make_pattern_stats_tool,
+            )
+            from react_agent import ReActAgent
+
+            tool_registry = ToolRegistry()
+
+            if AGENT_TOOLS_ENABLED.get("get_alert_history", True):
+                tool_registry.register(
+                    make_alert_history_tool(incident_manager, storage),
+                )
+            if AGENT_TOOLS_ENABLED.get("lookup_environment_context", True):
+                tool_registry.register(
+                    make_environment_lookup_tool(AGENT_ENV_ENTRIES),
+                )
+            if AGENT_TOOLS_ENABLED.get("get_attack_pattern_stats", True):
+                tool_registry.register(
+                    make_pattern_stats_tool(incident_manager, storage),
+                )
+
+            react_agent = ReActAgent(
+                provider=provider,
+                tools=tool_registry,
+                max_iterations=AGENT_MAX_ITERATIONS,
+                tool_timeout_seconds=AGENT_TOOL_TIMEOUT,
+                total_budget_seconds=AGENT_TOTAL_BUDGET,
+                include_lab_context_in_fallback=INCLUDE_LAB_CONTEXT,
+            )
+            log.info(
+                "ReAct agent enabled: tools=%s, max_iter=%d, budget=%.0fs",
+                tool_registry.list_names(), AGENT_MAX_ITERATIONS, AGENT_TOTAL_BUDGET,
+            )
+        except Exception as agent_err:  # noqa: BLE001 — degrade gracefully
+            log.warning(
+                "ReAct agent init failed (%s) — falling back to single_shot. "
+                "Set [agent].mode = 'single_shot' in app.config to silence this.",
+                agent_err,
+            )
+            react_agent = None
+
+    effective_agent_mode = "react" if react_agent is not None else "single_shot"
+
     # New ReportGenerator for incidents
     report_generator = ReportGenerator(
         provider=provider,
@@ -202,6 +280,8 @@ try:
         max_retries=MAX_RETRIES,
         is_repeat_offender=incident_manager.is_repeat_offender,
         on_report_ready=server.push_incident_report,
+        agent_mode=effective_agent_mode,
+        react_agent=react_agent,
     )
 
     # Wire IncidentManager -> ReportGenerator
@@ -213,6 +293,7 @@ try:
 
     log.info("Model provider : %s", model_config.provider.value)
     log.info("Model          : %s", model_config.model)
+    log.info("Agent mode     : %s", effective_agent_mode)
     log.info("Lab context    : %s", INCLUDE_LAB_CONTEXT)
     log.info("Summary mode   : %s", SUMMARY_MODE)
 
