@@ -21,6 +21,30 @@ from log_monitor import AlertRecord
 
 
 # ---------------------------------------------------------------------------
+# ReasoningStep — one iteration of the ReAct loop (agentic mode)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ReasoningStep:
+    """One iteration of the ReAct loop captured for transparency.
+
+    Used by the agentic ReAct path (ReActAgent). Single-shot path leaves
+    AlertClassification.reasoning_trace as None.
+
+    Captured for two purposes:
+      1. Dashboard display — shows the marker / user how the agent reasoned.
+      2. Evaluation — lets us audit when the agent uses tools and why.
+    """
+    iteration: int                          # 1-indexed (first round = 1)
+    thought: str                            # model's stated reasoning
+    action: Optional[str]                   # tool name, or None on final answer
+    action_input: Optional[Dict]            # tool arguments (parsed JSON)
+    observation: Optional[str]              # tool output JSON; None on final
+    duration_ms: int                        # wall-clock for LLM + tool exec
+    parse_error: Optional[str] = None       # set if this round's output failed to parse
+
+
+# ---------------------------------------------------------------------------
 # Per-alert AI classification (Stage 1 output)
 # ---------------------------------------------------------------------------
 
@@ -28,7 +52,8 @@ from log_monitor import AlertRecord
 class AlertClassification:
     """AI-generated verdict for a single Suricata alert.
 
-    Produced by ReportGenerator Stage 1. One per alert in the incident.
+    Produced by ReportGenerator Stage 1 (single-shot path) OR by ReActAgent
+    (react path). One per alert in the incident.
     """
 
     alert_id: str                    # derived from flow_id or UUID
@@ -53,8 +78,14 @@ class AlertClassification:
     confidence_score: float = 0.5    # 0.0 - 1.0, rule-based
 
     # Metadata
-    status: str = "complete"         # "complete" | "error"
+    status: str = "complete"         # "complete" | "error" | "partial"
     error: Optional[str] = None
+
+    # ReAct agent metadata (None / defaults when produced by single-shot path)
+    reasoning_trace: Optional[List[ReasoningStep]] = None
+    agent_mode: str = "single_shot"  # "single_shot" | "react"
+    parse_failure_count: int = 0     # ReAct-only: how many model outputs failed to parse
+    tool_calls: int = 0              # ReAct-only: number of tools invoked
 
 
 # ---------------------------------------------------------------------------
