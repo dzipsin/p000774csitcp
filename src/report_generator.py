@@ -1125,6 +1125,11 @@ class ReportGenerator:
                 severity=cls.severity,
                 recommendation=cls.recommendation,
                 classification_status=cls.status,
+                # ReAct metadata — None/defaults for single-shot path
+                reasoning_trace=cls.reasoning_trace,
+                agent_mode=cls.agent_mode,
+                parse_failure_count=cls.parse_failure_count,
+                tool_calls=cls.tool_calls,
             ))
 
         return results

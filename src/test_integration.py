@@ -479,13 +479,23 @@ def test_pipeline_react_agent_path():
         )
         assert analysis.recommendation == "block_source_ip"
 
-        # The on-disk template JSON should mark agent_mode=react on the
-        # alert_analyses extras (via classification_status / our serializer).
-        # We don't directly assert on the JSON here — the dataclass carrying
-        # this info is AlertClassification, which feeds AlertAnalysis. The
-        # presence of valid classification + recommendation proves the
-        # ReAct path ran.
-        print("    PASS: ReActAgent classification flowed through pipeline")
+        # ReAct agent metadata flowed through to AlertAnalysis
+        assert analysis.agent_mode == "react", (
+            f"Expected agent_mode=react, got '{analysis.agent_mode}'"
+        )
+        assert analysis.reasoning_trace is not None, (
+            "Expected reasoning_trace populated on AlertAnalysis"
+        )
+        assert len(analysis.reasoning_trace) >= 1, (
+            f"Expected non-empty reasoning_trace, got {analysis.reasoning_trace}"
+        )
+        step = analysis.reasoning_trace[0]
+        assert step.iteration == 1, f"first step iteration=1, got {step.iteration}"
+        assert "SQLi" in step.thought, (
+            f"thought should contain 'SQLi', got '{step.thought}'"
+        )
+
+        print("    PASS: ReActAgent classification + reasoning_trace flowed through pipeline")
 
     finally:
         import shutil

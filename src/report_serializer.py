@@ -451,19 +451,41 @@ def _serialise_alert_analyses(
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for a in report.alert_analyses:
-        out.append({
+        analysis: Dict[str, Any] = {
             "alert_id": a.alert_id,
             "attack_type_classified": a.attack_type_classified or "unknown",
             "payload_observed": a.payload_observed or "",
             "payload_classification": a.payload_classification or "",
             "likely_intent": a.likely_intent or "",
             "confidence_score": float(a.confidence_score or 0.0),
-            # Extras
+            # Extras — Stage 1 verdict mirror
             "classification": a.classification,
             "severity": a.severity,
             "recommendation": a.recommendation,
             "classification_status": a.classification_status,
-        })
+            # ReAct agent metadata (extras — allowed via additionalProperties)
+            "agent_mode": getattr(a, "agent_mode", "single_shot"),
+            "parse_failure_count": int(getattr(a, "parse_failure_count", 0) or 0),
+            "tool_calls": int(getattr(a, "tool_calls", 0) or 0),
+        }
+        # Reasoning trace: serialise to a list of plain dicts if present.
+        trace = getattr(a, "reasoning_trace", None)
+        if trace:
+            analysis["reasoning_trace"] = [
+                {
+                    "iteration": step.iteration,
+                    "thought": step.thought,
+                    "action": step.action,
+                    "action_input": step.action_input,
+                    "observation": step.observation,
+                    "duration_ms": step.duration_ms,
+                    "parse_error": step.parse_error,
+                }
+                for step in trace
+            ]
+        else:
+            analysis["reasoning_trace"] = None
+        out.append(analysis)
     return out
 
 

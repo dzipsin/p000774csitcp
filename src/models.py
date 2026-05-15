@@ -228,6 +228,14 @@ class AlertAnalysis:
     recommendation: str = ""                # block_source_ip | escalate_tier2 | continue_monitoring
     classification_status: str = "complete" # complete | error
 
+    # ReAct agent metadata (None / defaults when produced by single-shot path).
+    # The reasoning_trace is what the dashboard renders in the timeline view —
+    # without it, the agentic story is invisible to the user / marker.
+    reasoning_trace: Optional[List[ReasoningStep]] = None
+    agent_mode: str = "single_shot"         # "single_shot" | "react"
+    parse_failure_count: int = 0            # ReAct-only
+    tool_calls: int = 0                     # ReAct-only
+
 
 @dataclass
 class AlertExposure:
