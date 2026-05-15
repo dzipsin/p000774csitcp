@@ -31,6 +31,12 @@ from typing import Any, List, Optional
 
 from models import IncidentReport
 
+try:
+    from report_serializer import to_template_v1, validate_template_v1
+    _TEMPLATE_SERIALIZER_AVAILABLE = True
+except ImportError:  # pragma: no cover — defensive only
+    _TEMPLATE_SERIALIZER_AVAILABLE = False
+
 log = logging.getLogger(__name__)
 
 
@@ -75,7 +81,22 @@ class ReportStorage:
         """
         try:
             path = self._path_for_incident(report.incident_summary.incident_id)
-            payload = _report_to_dict(report)
+
+            # Emit template-v1-compliant JSON when the serializer is wired up.
+            # The internal IncidentReport dataclass is preserved as-is; the
+            # serializer reshapes field names + section placement to match the
+            # capstone Incident Report Template v1 spec.
+            if _TEMPLATE_SERIALIZER_AVAILABLE:
+                payload = to_template_v1(report)
+                try:
+                    validate_template_v1(payload)
+                except Exception as ve:  # noqa: BLE001 — log + write anyway
+                    log.warning(
+                        "Template v1 schema validation failed for incident %s: %s",
+                        report.incident_summary.incident_id, ve,
+                    )
+            else:
+                payload = _report_to_dict(report)
 
             # Atomic write: write to a temp file in the same dir, then rename.
             # tempfile in same dir ensures the rename is on the same filesystem

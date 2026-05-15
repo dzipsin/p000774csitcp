@@ -123,12 +123,23 @@ class Server:
         """Cache and broadcast an incident report update.
 
         Called from ReportGenerator's worker thread after a report is generated.
+
+        Emits the template-v1-compliant JSON shape so the on-disk reports
+        (via ReportStorage), the cache, the /api/incidents endpoint, and the
+        WebSocket push all use one consistent format. Internal extras
+        (incident_id, classification per alert, reasoning trace) are
+        preserved alongside template-required fields.
         """
         try:
-            report_dict = dataclasses.asdict(report)
+            from report_serializer import to_template_v1
+            report_dict = to_template_v1(report)
         except Exception as e:
             log.exception("Failed to serialise IncidentReport: %s", e)
-            return
+            # Fallback to raw asdict so the dashboard at least gets something.
+            try:
+                report_dict = dataclasses.asdict(report)
+            except Exception:
+                return
 
         incident_id = report.incident_summary.incident_id
 

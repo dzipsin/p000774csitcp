@@ -63,9 +63,19 @@ class AlertRecord:
     raw_event: dict = field(compare=False)  # mutable but excluded from hash
 
     def to_dict(self) -> dict:
-        """Serialise to a plain dict (JSON-safe, raw_event excluded)."""
+        """Serialise to a plain dict (JSON-safe, raw_event excluded).
+
+        HTTP context from raw_event (url, method, status) is FLATTENED into
+        top-level keys so downstream consumers — notably the template
+        serializer — can read it without seeing the raw event blob.
+        """
         d = asdict(self)
-        d.pop("raw_event", None)
+        raw_event = d.pop("raw_event", None) or {}
+        http = raw_event.get("http") if isinstance(raw_event, dict) else None
+        if isinstance(http, dict):
+            d["http_url"] = str(http.get("url", "") or "")
+            d["http_method"] = str(http.get("http_method", "") or "")
+            d["http_status"] = http.get("status", "")
         return d
 
 
