@@ -147,6 +147,22 @@ Initial Access, Execution, Persistence, Privilege Escalation, Defense Evasion,
 Credential Access, Discovery, Lateral Movement, Collection, Command and Control,
 Exfiltration, Impact.
 
+MAPPING GUIDANCE (when alerts match common patterns, prefer these tactics):
+- SQL Injection probes / payloads          -> Initial Access
+- SQL Injection targeting credentials      -> Credential Access
+- Reflected XSS                            -> Initial Access
+- Stored / persistent XSS                  -> Persistence
+- Port scans / suspicious-inbound probes   -> Discovery (NOT Execution)
+- Reconnaissance / scan signatures         -> Reconnaissance
+- Command injection / RCE                  -> Execution
+- Path / directory traversal (read)        -> Discovery
+- Local / remote file inclusion            -> Initial Access
+- Brute force                              -> Credential Access
+- Bot / web-attack chatter without payload -> Reconnaissance
+Pick the SINGLE most accurate tactic given the dominant alert type. Do NOT
+output "Execution" for SQLi or XSS unless there is explicit evidence of
+remote code execution.
+
 INCIDENT DATA:
 - Source IP: {source_ip}
 - Repeat offender this session: {repeat_offender}
@@ -157,6 +173,10 @@ INCIDENT DATA:
 - Time window: {first_seen} to {last_seen}
 - Top signatures: {top_signatures}
 - Targeted endpoints: {endpoints}
+
+ENRICHMENT CONTEXT (from Stage 1 agent — already factored into per-alert
+verdicts, included here so your narrative can reference it concretely):
+{enrichment_summary}
 
 Per-alert classifications (summary):
 {classification_summaries}
@@ -1021,6 +1041,11 @@ class ReportGenerator:
             summaries.append(line)
         summary_block = "\n".join(summaries) if summaries else "(none)"
 
+        # Enrichment summary aggregated from Stage 1 reasoning traces.
+        # Lets the narrative reference concrete facts (prior alert counts,
+        # environment role) instead of just "the agent classified X as Y".
+        enrichment_summary = _summarise_enrichment(classifications)
+
         prompt = _STAGE2_PROMPT_TEMPLATE.format(
             source_ip=incident.source_ip,
             repeat_offender=self._is_repeat_offender(incident.source_ip),
@@ -1034,6 +1059,7 @@ class ReportGenerator:
             last_seen=incident.last_seen_display,
             top_signatures=", ".join(top_sigs) if top_sigs else "None",
             endpoints=", ".join(sorted(endpoints)) if endpoints else "None",
+            enrichment_summary=enrichment_summary,
             classification_summaries=summary_block,
         )
 
@@ -1285,6 +1311,84 @@ def _compute_overall_severity(classifications: List[AlertClassification]) -> str
             highest = rank
             label = c.severity
     return label
+
+
+def _summarise_enrichment(classifications: List[AlertClassification]) -> str:
+    """Build a compact, human-readable summary of the auto-enrichment results.
+
+    Pulls observations from the first classification's reasoning_trace whose
+    `source == "system"`. We use the first classification because all alerts
+    in an incident share the same source IP (and so the cached enrichment
+    results are identical) — pulling once is sufficient and keeps the
+    Stage 2 prompt small.
+
+    Returns "(no enrichment data)" when the report was produced in
+    single-shot mode or auto-enrichment was disabled.
+    """
+    if not classifications:
+        return "(no enrichment data — no classifications produced)"
+
+    # Find the first classification with a non-empty reasoning_trace
+    trace: List = []
+    for c in classifications:
+        if c.reasoning_trace:
+            trace = c.reasoning_trace
+            break
+    if not trace:
+        return "(no enrichment data — single-shot or auto-enrichment disabled)"
+
+    lines: List[str] = []
+    for step in trace:
+        if getattr(step, "source", "model") != "system":
+            continue
+        if not step.action:
+            continue
+        # Decode the observation JSON if possible so the model can read key
+        # facts instead of a serialised blob.
+        obs_text = step.observation or ""
+        decoded_obs: Any = obs_text
+        try:
+            decoded_obs = json.loads(obs_text)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+        if step.action == "get_alert_history" and isinstance(decoded_obs, dict):
+            lines.append(
+                f"- prior activity: {decoded_obs.get('total_prior_alerts', 0)} "
+                f"alert(s) in last {decoded_obs.get('lookback_hours', 24)}h, "
+                f"attack types {decoded_obs.get('attack_types_seen', [])}, "
+                f"repeat offender this session = "
+                f"{decoded_obs.get('is_repeat_offender_this_session', False)}"
+            )
+        elif step.action == "lookup_environment_context" and isinstance(decoded_obs, dict):
+            if decoded_obs.get("match_found"):
+                lines.append(
+                    f"- environment lookup: source IP matched "
+                    f"'{decoded_obs.get('matched_pattern')}' "
+                    f"(role={decoded_obs.get('role')}, "
+                    f"hint={decoded_obs.get('classification_hint')})"
+                )
+            else:
+                lines.append(
+                    "- environment lookup: source IP not in known map "
+                    "(treat as unknown)"
+                )
+        elif step.action == "get_attack_pattern_stats" and isinstance(decoded_obs, dict):
+            tpr = decoded_obs.get("observed_true_positive_rate")
+            tpr_txt = f"observed TPR {tpr:.2f}" if isinstance(tpr, (int, float)) else "no historical TPR"
+            lines.append(
+                f"- attack pattern stats: {decoded_obs.get('total_alerts', 0)} "
+                f"alert(s) of type {decoded_obs.get('attack_type')} from "
+                f"{decoded_obs.get('unique_source_ips', 0)} unique IP(s) in "
+                f"last {decoded_obs.get('lookback_hours', 24)}h; {tpr_txt}"
+            )
+        else:
+            # Generic fallback so unknown future enrichment tools still appear
+            lines.append(f"- {step.action}: {obs_text[:160]}")
+
+    if not lines:
+        return "(no enrichment data — no system steps in trace)"
+    return "\n".join(lines)
 
 
 def _ensure_list_of_strings(value) -> List[str]:
