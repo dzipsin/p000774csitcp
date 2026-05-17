@@ -568,5 +568,13 @@ def to_template_v1(report: IncidentReport) -> Dict[str, Any]:
             "generation_status": report.generation_status,
             "generation_error": report.generation_error,
         },
+        # Mirror generation metadata at the top level too. The dashboard JS
+        # reads model_used / provider_type from there; cheap to provide both
+        # locations rather than coupling the JS to the _generation_metadata
+        # block layout.
+        "model_used":         report.model_used,
+        "provider_type":      report.provider_type,
+        "generation_status":  report.generation_status,
+        "generation_error":   report.generation_error,
     }
     return payload
