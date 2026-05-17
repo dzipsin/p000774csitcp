@@ -715,6 +715,122 @@ def test_auto_enrichment_results_visible_to_llm() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Enrichment cache tests (P2a)
+# ---------------------------------------------------------------------------
+
+def test_enrichment_cache_hit_marks_thought_as_cached() -> None:
+    _section("enrichment cache: second call with same IP reuses observation")
+
+    # Two classify calls with same src_ip should hit the cache on the 2nd.
+    provider = MockProvider([
+        _final_answer_xml(),   # 1st classify
+        _final_answer_xml(),   # 2nd classify
+    ])
+    agent = ReActAgent(
+        provider, _registry_with_all_three_enrichment_tools(),
+        max_iterations=3, auto_enrichment=True,
+        enrichment_cache_ttl_seconds=60.0,
+    )
+
+    alert = _make_alert(src_ip="10.99.99.1", signature="SQL Injection")
+
+    cls1 = agent.classify(alert)
+    cls2 = agent.classify(alert)
+
+    # First trace's system steps have no "[cached" marker
+    first_system = [s for s in cls1.reasoning_trace if s.source == "system"]
+    for s in first_system:
+        _assert("[cached" not in s.thought, f"1st call NOT cached for {s.action}",
+                s.thought)
+
+    # Second trace's system steps DO have "[cached" marker
+    second_system = [s for s in cls2.reasoning_trace if s.source == "system"]
+    for s in second_system:
+        _assert("[cached" in s.thought, f"2nd call cached for {s.action}", s.thought)
+
+    # Observations should match between cached and original
+    for s1, s2 in zip(first_system, second_system):
+        _assert(s1.observation == s2.observation,
+                f"cached observation matches original for {s1.action}")
+
+
+def test_enrichment_cache_disabled_with_ttl_zero() -> None:
+    _section("enrichment cache: ttl=0 disables caching entirely")
+
+    provider = MockProvider([_final_answer_xml(), _final_answer_xml()])
+    agent = ReActAgent(
+        provider, _registry_with_all_three_enrichment_tools(),
+        max_iterations=3, auto_enrichment=True,
+        enrichment_cache_ttl_seconds=0.0,
+    )
+
+    alert = _make_alert(src_ip="10.99.99.2", signature="SQL Injection")
+    cls1 = agent.classify(alert)
+    cls2 = agent.classify(alert)
+
+    # Neither trace's system steps should be cached
+    for cls in (cls1, cls2):
+        for s in cls.reasoning_trace:
+            if s.source == "system":
+                _assert("[cached" not in s.thought,
+                        f"ttl=0 -> never cached for {s.action}", s.thought)
+
+
+def test_enrichment_cache_size_eviction() -> None:
+    _section("enrichment cache: oldest entries evicted at size cap")
+
+    provider = MockProvider([_final_answer_xml() for _ in range(10)])
+    agent = ReActAgent(
+        provider, _registry_with_all_three_enrichment_tools(),
+        max_iterations=3, auto_enrichment=True,
+        enrichment_cache_ttl_seconds=60.0,
+    )
+    # Shrink cap so we can trigger eviction with a few entries
+    agent._ENRICHMENT_CACHE_MAX_SIZE = 4
+
+    # Fire alerts with many different src_ips so each generates new cache keys
+    for i in range(8):
+        agent.classify(_make_alert(
+            src_ip=f"10.0.0.{i}",
+            signature="some unrecognised signature",  # attack_type=Other,
+        ))
+
+    # After 8 alerts with 2 cache keys each (history+env, since attack_type=Other
+    # means no stats call), we wrote 16 entries with cap=4. Each insert past 4
+    # triggers eviction of oldest half (down to 2), then we refill.
+    # Final cache size should never exceed cap.
+    cache_size = len(agent._enrichment_cache)
+    _assert(cache_size <= agent._ENRICHMENT_CACHE_MAX_SIZE,
+            f"cache stayed within cap (size={cache_size}, cap={agent._ENRICHMENT_CACHE_MAX_SIZE})")
+
+
+def test_enrichment_cache_per_attack_type_separate() -> None:
+    _section("enrichment cache: different attack_types cache separately")
+
+    provider = MockProvider([_final_answer_xml() for _ in range(3)])
+    agent = ReActAgent(
+        provider, _registry_with_all_three_enrichment_tools(),
+        max_iterations=3, auto_enrichment=True,
+        enrichment_cache_ttl_seconds=60.0,
+    )
+
+    # SQLi alert from one IP
+    agent.classify(_make_alert(src_ip="10.0.0.1", signature="SQL Injection"))
+    # XSS alert from same IP — history+env cached, stats fresh
+    cls_xss = agent.classify(_make_alert(src_ip="10.0.0.1", signature="XSS"))
+
+    system_steps = [s for s in cls_xss.reasoning_trace if s.source == "system"]
+    by_action = {s.action: s for s in system_steps}
+
+    _assert("[cached" in by_action["get_alert_history"].thought,
+            "get_alert_history (same IP) cached")
+    _assert("[cached" in by_action["lookup_environment_context"].thought,
+            "lookup_environment_context (same IP) cached")
+    _assert("[cached" not in by_action["get_attack_pattern_stats"].thought,
+            "get_attack_pattern_stats (different attack_type) NOT cached")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -751,6 +867,11 @@ def main() -> int:
         test_auto_enrichment_off_no_system_steps,
         test_auto_enrichment_skips_unregistered_tools,
         test_auto_enrichment_results_visible_to_llm,
+        # Enrichment cache (P2a)
+        test_enrichment_cache_hit_marks_thought_as_cached,
+        test_enrichment_cache_disabled_with_ttl_zero,
+        test_enrichment_cache_size_eviction,
+        test_enrichment_cache_per_attack_type_separate,
     ]
 
     for t in tests:

@@ -533,6 +533,24 @@ function _renderReasoningTrace(analyses) {
   return html;
 }
 
+function _formatObservation(rawObs) {
+  // Pretty-print observation when it parses as JSON; fall back to raw text
+  // when it doesn't. Indent with 2 spaces. Tool results are JSON-serialised
+  // by ToolResult.to_observation_json() so most observations will parse.
+  if (rawObs == null) return '';
+  const text = String(rawObs);
+  if (!text.trim()) return text;
+  // Only attempt parse for things that look like objects/arrays — avoid
+  // calling JSON.parse on every short observation.
+  const first = text.trim()[0];
+  if (first !== '{' && first !== '[') return text;
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
 function _renderReasoningStep(step) {
   const isFinal = !step.action;
   const isSystem = (step.source === 'system');
@@ -564,7 +582,7 @@ function _renderReasoningStep(step) {
       </div>`;
   }
   if (step.observation != null) {
-    bodyHTML += `<div class="reasoning-observation">${esc(step.observation)}</div>`;
+    bodyHTML += `<div class="reasoning-observation">${esc(_formatObservation(step.observation))}</div>`;
   }
   if (isFinal && !errorBlock && !isSystem) {
     bodyHTML += `<div class="reasoning-final-marker">final answer ✓</div>`;

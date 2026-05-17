@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -250,6 +251,10 @@ class ReActAgent:
         classification = agent.classify(alert)   # never raises
     """
 
+    # Bound on the enrichment cache size. When exceeded, the oldest half is
+    # evicted in one shot (cheap, infrequent).
+    _ENRICHMENT_CACHE_MAX_SIZE = 200
+
     def __init__(
         self,
         provider: ModelProvider,
@@ -260,6 +265,7 @@ class ReActAgent:
         max_retries_on_parse_fail: int = 1,
         include_lab_context_in_fallback: bool = True,
         auto_enrichment: bool = True,
+        enrichment_cache_ttl_seconds: float = 60.0,
     ):
         """
         Args:
@@ -283,6 +289,15 @@ class ReActAgent:
                                             the LLM. Default True. Set
                                             False for evaluation ablation
                                             or to test pure-LLM behaviour.
+            enrichment_cache_ttl_seconds:   How long the agent caches the
+                                            observation from each enrichment
+                                            tool call. Within this window
+                                            (per (tool, args) key) the cached
+                                            result is reused — saves compute
+                                            and cleans the trace when many
+                                            alerts in an incident share the
+                                            same source IP / attack type.
+                                            Default 60s. Set 0 to disable.
         """
         self._provider = provider
         self._tools = tools
@@ -292,6 +307,14 @@ class ReActAgent:
         self.max_retries_on_parse_fail = max(0, int(max_retries_on_parse_fail))
         self._include_lab_context_in_fallback = include_lab_context_in_fallback
         self._auto_enrichment = bool(auto_enrichment)
+
+        # Enrichment cache — thread-safe (classify() is called from
+        # IncidentManager worker threads). Cache entries hold the observation
+        # JSON + the original tool execution duration so we can reconstruct
+        # honest ReasoningSteps on cache hits.
+        self._enrichment_cache_ttl = max(0.0, float(enrichment_cache_ttl_seconds))
+        self._enrichment_cache: Dict[str, Dict[str, Any]] = {}
+        self._enrichment_cache_lock = threading.Lock()
 
         # System prompt is built once at init. Tool registry is treated as
         # immutable after agent construction — register all tools before
@@ -444,6 +467,10 @@ class ReActAgent:
           - get_attack_pattern_stats(attack_type): only when attack_type is a
             recognised label (not "Other")
 
+        TTL cache keyed by (tool, args) means many alerts in the same
+        incident burst (same source IP, possibly different attack types) share
+        the same observation rather than re-calling the tool N times.
+
         Never raises. Tool errors are captured as observation strings, the
         loop continues.
         """
@@ -453,20 +480,44 @@ class ReActAgent:
             tool_name: str,
             args: dict,
             thought: str,
+            cache_key: str,
         ) -> None:
             if not self._tools.has(tool_name):
                 return
+
+            # 1. Cache check
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                age = int(time.monotonic() - cached["ts"])
+                steps.append(ReasoningStep(
+                    iteration=0,
+                    thought=f"{thought} [cached, age {age}s]",
+                    action=tool_name,
+                    action_input=dict(args),
+                    observation=cached["observation"],
+                    duration_ms=cached["duration_ms"],
+                    source="system",
+                ))
+                return
+
+            # 2. Fresh tool call
             t0 = time.monotonic()
             result: ToolResult = self._tools.call(
                 tool_name, args, timeout_seconds=self.tool_timeout_seconds,
             )
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            observation = result.to_observation_json()
+
+            # 3. Cache the result (no-op when TTL is 0)
+            self._cache_put(cache_key, observation, duration_ms)
+
             steps.append(ReasoningStep(
                 iteration=0,
                 thought=thought,
                 action=tool_name,
                 action_input=dict(args),
-                observation=result.to_observation_json(),
-                duration_ms=int((time.monotonic() - t0) * 1000),
+                observation=observation,
+                duration_ms=duration_ms,
                 source="system",
             ))
 
@@ -477,6 +528,7 @@ class ReActAgent:
                 {"src_ip": alert.src_ip, "hours": 24},
                 "Auto-enrichment: checking prior activity from source IP "
                 f"{alert.src_ip}",
+                cache_key=f"history:{alert.src_ip}:24",
             )
 
         # 2. Environment classification for the source IP
@@ -485,6 +537,7 @@ class ReActAgent:
                 "lookup_environment_context",
                 {"query": alert.src_ip},
                 "Auto-enrichment: looking up source IP environment context",
+                cache_key=f"env:{alert.src_ip}",
             )
 
         # 3. Attack-type frequency stats (only when the type is known)
@@ -493,9 +546,59 @@ class ReActAgent:
                 "get_attack_pattern_stats",
                 {"attack_type": attack_type, "hours": 24},
                 f"Auto-enrichment: looking up recent {attack_type} activity",
+                cache_key=f"stats:{attack_type}:24",
             )
 
         return steps
+
+    # ------------------------------------------------------------------
+    # Enrichment cache (thread-safe, TTL-bounded, size-bounded)
+    # ------------------------------------------------------------------
+
+    def _cache_get(self, key: str) -> Optional[Dict[str, Any]]:
+        """Return the cache entry for `key` if it's fresh, otherwise None.
+
+        TTL of 0 disables the cache entirely (always returns None). Expired
+        entries are evicted on access.
+        """
+        if self._enrichment_cache_ttl <= 0:
+            return None
+        with self._enrichment_cache_lock:
+            entry = self._enrichment_cache.get(key)
+            if entry is None:
+                return None
+            if (time.monotonic() - entry["ts"]) > self._enrichment_cache_ttl:
+                self._enrichment_cache.pop(key, None)
+                return None
+            return entry
+
+    def _cache_put(
+        self,
+        key: str,
+        observation: str,
+        duration_ms: int,
+    ) -> None:
+        """Store an observation in the enrichment cache.
+
+        When the cache exceeds _ENRICHMENT_CACHE_MAX_SIZE entries, the oldest
+        half is evicted in one shot (cheap, infrequent). No-op when TTL is 0.
+        """
+        if self._enrichment_cache_ttl <= 0:
+            return
+        with self._enrichment_cache_lock:
+            if len(self._enrichment_cache) >= self._ENRICHMENT_CACHE_MAX_SIZE:
+                # Evict oldest half
+                items = sorted(
+                    self._enrichment_cache.items(),
+                    key=lambda kv: kv[1]["ts"],
+                )
+                for k, _ in items[: len(items) // 2]:
+                    self._enrichment_cache.pop(k, None)
+            self._enrichment_cache[key] = {
+                "ts": time.monotonic(),
+                "observation": observation,
+                "duration_ms": duration_ms,
+            }
 
     # ------------------------------------------------------------------
     # Single-round handling
