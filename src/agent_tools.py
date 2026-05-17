@@ -527,22 +527,26 @@ def _aggregate_pattern_stats(
     except Exception as e:  # noqa: BLE001 — defensive boundary
         log.warning("get_attack_pattern_stats: disk read failed: %s", e)
 
-    tpr: Any = None
-    if classified_total > 0:
-        tpr = round(tp_total / classified_total, 3)
-
-    return {
+    out: Dict[str, Any] = {
         "attack_type": attack_type,
         "lookback_hours": hours,
         "total_alerts": total_alerts,
         "unique_source_ips": len(unique_ips),
         "incident_count": len(incident_ids_seen),
-        "observed_true_positive_rate": tpr,
         "most_recent_alert_iso": (
             datetime.fromtimestamp(most_recent_ts, tz=timezone.utc).isoformat()
             if most_recent_ts > 0 else None
         ),
     }
+
+    # Only emit observed_true_positive_rate when we have classified data on
+    # disk to compute from. On fresh runs (or single-shot evaluation runs
+    # with no disk history) the field would otherwise be a noisy `null`
+    # in every report.
+    if classified_total > 0:
+        out["observed_true_positive_rate"] = round(tp_total / classified_total, 3)
+
+    return out
 
 
 def make_pattern_stats_tool(

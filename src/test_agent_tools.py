@@ -703,7 +703,8 @@ def test_stats_empty_returns_zeros() -> None:
     _assert(out["total_alerts"] == 0, "no alerts")
     _assert(out["unique_source_ips"] == 0, "no IPs")
     _assert(out["incident_count"] == 0, "no incidents")
-    _assert(out["observed_true_positive_rate"] is None, "TPR null with no data")
+    _assert("observed_true_positive_rate" not in out,
+            "TPR field omitted when no data")
     _assert(out["most_recent_alert_iso"] is None, "no recent timestamp")
     _assert(out["lookback_hours"] == 24, "default lookback")
 
@@ -724,7 +725,8 @@ def test_stats_in_memory_matching_type() -> None:
     _assert(out["total_alerts"] == 3, "3 SQLi alerts counted", str(out))
     _assert(out["unique_source_ips"] == 2, "2 unique IPs")
     _assert(out["incident_count"] == 2, "2 incidents")
-    _assert(out["observed_true_positive_rate"] is None, "no TPR from in-memory only")
+    _assert("observed_true_positive_rate" not in out,
+            "TPR field omitted from in-memory-only output")
     _assert(out["most_recent_alert_iso"] is not None, "recent timestamp recorded")
 
 
@@ -892,7 +894,8 @@ def test_stats_null_storage() -> None:
 
     out = tool.call({"attack_type": "XSS"}).output
     _assert(out["total_alerts"] == 1, "in-memory XSS counted")
-    _assert(out["observed_true_positive_rate"] is None, "TPR null without storage")
+    _assert("observed_true_positive_rate" not in out,
+            "TPR field omitted when storage is None")
 
 
 def test_stats_broken_storage_graceful() -> None:
@@ -908,7 +911,8 @@ def test_stats_broken_storage_graceful() -> None:
 
     out = tool.call({"attack_type": "SQLi"}).output
     _assert(out["total_alerts"] == 1, "in-memory still counted")
-    _assert(out["observed_true_positive_rate"] is None, "no TPR when disk failed")
+    _assert("observed_true_positive_rate" not in out,
+            "TPR field omitted when disk read failed")
 
 
 # ---------------------------------------------------------------------------
