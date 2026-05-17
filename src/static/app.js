@@ -445,6 +445,12 @@ function buildIncidentDetail(report) {
     detail.appendChild(_section(`Alert Analyses (${analyses.length})`, html));
   }
 
+  // Agent Reasoning timeline (ReAct mode only)
+  const reasoningHTML = _renderReasoningTrace(analyses);
+  if (reasoningHTML) {
+    detail.appendChild(_section('Agent Reasoning', reasoningHTML));
+  }
+
   // Indicators of compromise
   const iocs = expo.indicators_of_compromise || [];
   if (iocs.length) {
@@ -482,6 +488,90 @@ function _section(title, innerHTML) {
   body.innerHTML = innerHTML;
   wrap.appendChild(body);
   return wrap;
+}
+
+// ----------------------------------------------------------------------------
+// Agent Reasoning timeline (ReAct mode only)
+// ----------------------------------------------------------------------------
+
+function _renderReasoningTrace(analyses) {
+  // Filter to alerts that have a populated reasoning trace.
+  const withTrace = analyses.filter(a =>
+    Array.isArray(a.reasoning_trace) && a.reasoning_trace.length > 0
+  );
+  if (!withTrace.length) return null;
+
+  // Render one block per alert (max 5; mirror the alert analyses cap)
+  const blocks = withTrace.slice(0, 5).map(a => {
+    const trace = a.reasoning_trace || [];
+    const totalMs = trace.reduce((s, st) => s + (st.duration_ms || 0), 0);
+    const totalSec = (totalMs / 1000).toFixed(1);
+    const alertIdShort = String(a.alert_id || '').slice(0, 12) || '—';
+    const mode = a.agent_mode || 'single_shot';
+    const toolCalls = a.tool_calls ?? 0;
+
+    const stepsHTML = trace.map(step => _renderReasoningStep(step)).join('');
+
+    return `
+      <div class="reasoning-alert-block">
+        <div class="reasoning-alert-header">
+          <span class="reasoning-alert-id">${esc(alertIdShort)}</span>
+          <span class="reasoning-mode-badge mode-${esc(mode)}">${esc(mode)}</span>
+          <span class="reasoning-meta">${trace.length} step${trace.length === 1 ? '' : 's'}</span>
+          <span class="reasoning-meta">${toolCalls} tool${toolCalls === 1 ? '' : 's'}</span>
+          <span class="reasoning-meta">${esc(totalSec)}s total</span>
+        </div>
+        <div class="reasoning-steps">${stepsHTML}</div>
+      </div>
+    `;
+  }).join('');
+
+  let html = `<div class="reasoning-trace">${blocks}</div>`;
+  if (withTrace.length > 5) {
+    html += `<div style="margin-top:6px;color:var(--muted);font-size:0.7rem">… ${withTrace.length - 5} more</div>`;
+  }
+  return html;
+}
+
+function _renderReasoningStep(step) {
+  const isFinal = !step.action;
+  const iteration = step.iteration ?? '?';
+  const duration = step.duration_ms ? `${step.duration_ms}ms` : '';
+  const errorBlock = step.parse_error
+    ? `<div class="reasoning-parse-error">⚠ parse error: ${esc(step.parse_error)}</div>`
+    : '';
+
+  let bodyHTML = '';
+  if (step.thought) {
+    bodyHTML += `<div class="reasoning-thought">${esc(step.thought)}</div>`;
+  }
+  if (step.action) {
+    const argsStr = step.action_input != null
+      ? JSON.stringify(step.action_input)
+      : '{}';
+    bodyHTML += `
+      <div class="reasoning-action">
+        <span class="reasoning-action-name">${esc(step.action)}</span>
+        <span class="reasoning-action-args">${esc(argsStr)}</span>
+      </div>`;
+  }
+  if (step.observation != null) {
+    bodyHTML += `<div class="reasoning-observation">${esc(step.observation)}</div>`;
+  }
+  if (isFinal && !errorBlock) {
+    bodyHTML += `<div class="reasoning-final-marker">final answer ✓</div>`;
+  }
+
+  return `
+    <div class="reasoning-step ${isFinal ? 'is-final' : ''}">
+      <div class="reasoning-step-badge">${esc(iteration)}</div>
+      <div class="reasoning-step-body">
+        ${bodyHTML}
+        ${errorBlock}
+        ${duration ? `<div class="reasoning-step-duration">${esc(duration)}</div>` : ''}
+      </div>
+    </div>
+  `;
 }
 
 // ----------------------------------------------------------------------------
