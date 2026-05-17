@@ -539,7 +539,12 @@ function _renderReasoningStep(step) {
   const iteration = step.iteration ?? '?';
   // System enrichment steps display "A" (auto) badge instead of iteration number
   const badgeLabel = isSystem ? 'A' : iteration;
-  const duration = step.duration_ms ? `${step.duration_ms}ms` : '';
+  // Always render a duration label. 0 / null / undefined / sub-1ms collapse to "<1ms"
+  // rather than disappearing silently (small fast tool calls were invisible before).
+  let duration = '';
+  if (step.duration_ms != null && Number.isFinite(step.duration_ms)) {
+    duration = step.duration_ms < 1 ? '<1ms' : `${step.duration_ms}ms`;
+  }
   const errorBlock = step.parse_error
     ? `<div class="reasoning-parse-error">⚠ parse error: ${esc(step.parse_error)}</div>`
     : '';
