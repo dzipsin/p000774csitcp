@@ -195,6 +195,22 @@ def _registry_with_stub() -> ToolRegistry:
     return r
 
 
+def _make_agent(provider, tools, **kwargs):
+    """Test helper: build a ReActAgent with auto-enrichment disabled by
+    default.
+
+    The existing tests in this module were written before auto-enrichment
+    was added and assert on exact reasoning_trace lengths that assume
+    pure LLM-driven steps. They opt out of enrichment so they continue
+    to exercise the loop semantics they were originally written for.
+
+    Tests of auto-enrichment behaviour itself instantiate ReActAgent
+    directly with auto_enrichment=True (the production default).
+    """
+    kwargs.setdefault("auto_enrichment", False)
+    return ReActAgent(provider=provider, tools=tools, **kwargs)
+
+
 def _final_answer_xml(
     classification: str = "true_positive",
     severity: str = "High",
@@ -308,7 +324,7 @@ def test_direct_final_answer_no_tool() -> None:
     _section("ReActAgent: direct final_answer (no tool)")
 
     provider = MockProvider([_final_answer_xml()])
-    agent = ReActAgent(provider, _registry_with_stub(), max_iterations=3)
+    agent = _make_agent(provider, _registry_with_stub(), max_iterations=3)
     cls = agent.classify(_make_alert())
 
     _assert(cls.status == "complete", "status complete", cls.status)
@@ -330,7 +346,7 @@ def test_one_tool_call_then_final() -> None:
         _action_xml("get_alert_history", '{"src_ip": "192.168.56.1"}', "checking history"),
         _final_answer_xml(reasoning="based on history"),
     ])
-    agent = ReActAgent(provider, _registry_with_stub(), max_iterations=3)
+    agent = _make_agent(provider, _registry_with_stub(), max_iterations=3)
     cls = agent.classify(_make_alert())
 
     _assert(cls.status == "complete", "status complete", cls.status)
@@ -354,7 +370,7 @@ def test_two_tool_calls_then_final() -> None:
         _action_xml("get_attack_pattern_stats", '{"attack_type": "SQLi"}', "now check stats"),
         _final_answer_xml(),
     ])
-    agent = ReActAgent(provider, registry, max_iterations=3)
+    agent = _make_agent(provider, registry, max_iterations=3)
     cls = agent.classify(_make_alert())
 
     _assert(cls.status == "complete", "complete after 2 tools + final")
@@ -369,7 +385,7 @@ def test_parse_failure_then_retry_succeeds() -> None:
         "garbage output, no tags",
         _final_answer_xml(),
     ])
-    agent = ReActAgent(
+    agent = _make_agent(
         provider, _registry_with_stub(),
         max_iterations=3, max_retries_on_parse_fail=1,
     )
@@ -394,7 +410,7 @@ def test_parse_failure_exhausts_retries_falls_back() -> None:
             '"reasoning": "fell back to single-shot after parse failures"}'
         ],
     )
-    agent = ReActAgent(
+    agent = _make_agent(
         provider, _registry_with_stub(),
         max_iterations=3, max_retries_on_parse_fail=1,
     )
@@ -418,7 +434,7 @@ def test_action_input_not_json_is_parse_error() -> None:
         "<action_input>not valid json</action_input>",
         _final_answer_xml(),
     ])
-    agent = ReActAgent(
+    agent = _make_agent(
         provider, _registry_with_stub(),
         max_iterations=3, max_retries_on_parse_fail=1,
     )
@@ -436,7 +452,7 @@ def test_unknown_tool_name_loop_continues() -> None:
         _action_xml("nonexistent_tool", '{"x": 1}', "calling unknown"),
         _final_answer_xml(),
     ])
-    agent = ReActAgent(
+    agent = _make_agent(
         provider, _registry_with_stub(),
         max_iterations=3,
     )
@@ -463,7 +479,7 @@ def test_llm_call_raises_falls_back() -> None:
             '"reasoning": "fallback after LLM error"}'
         ],
     )
-    agent = ReActAgent(provider, _registry_with_stub(), max_iterations=3)
+    agent = _make_agent(provider, _registry_with_stub(), max_iterations=3)
     cls = agent.classify(_make_alert())
 
     _assert(cls.status == "partial", "partial after LLM error + fallback",
@@ -486,7 +502,7 @@ def test_iteration_cap_falls_back() -> None:
             '"reasoning": "iteration cap hit"}'
         ],
     )
-    agent = ReActAgent(provider, _registry_with_stub(), max_iterations=2)
+    agent = _make_agent(provider, _registry_with_stub(), max_iterations=2)
     cls = agent.classify(_make_alert())
 
     _assert(cls.status == "partial", "partial after iter cap fallback")
@@ -507,7 +523,7 @@ def test_final_answer_validation_failure() -> None:
     provider = MockProvider(
         responses=[bad_final, _final_answer_xml()],
     )
-    agent = ReActAgent(
+    agent = _make_agent(
         provider, _registry_with_stub(),
         max_iterations=3, max_retries_on_parse_fail=1,
     )
@@ -530,7 +546,7 @@ def test_fallback_failure_returns_error_classification() -> None:
         responses=["garbage 1", "garbage 2"],   # exhaust react retries
         json_responses=["not even valid json"],  # fallback also broken
     )
-    agent = ReActAgent(
+    agent = _make_agent(
         provider, _registry_with_stub(),
         max_iterations=3, max_retries_on_parse_fail=1,
     )
@@ -547,7 +563,7 @@ def test_empty_tool_registry_works() -> None:
     _section("ReActAgent: empty tool registry — direct final_answer still works")
 
     provider = MockProvider([_final_answer_xml()])
-    agent = ReActAgent(provider, _empty_registry(), max_iterations=3)
+    agent = _make_agent(provider, _empty_registry(), max_iterations=3)
     cls = agent.classify(_make_alert())
 
     _assert(cls.status == "complete", "completes without tools available")
@@ -561,7 +577,7 @@ def test_reasoning_trace_field_ordering() -> None:
         _action_xml(),
         _final_answer_xml(),
     ])
-    agent = ReActAgent(provider, _registry_with_stub(), max_iterations=3)
+    agent = _make_agent(provider, _registry_with_stub(), max_iterations=3)
     cls = agent.classify(_make_alert())
 
     _assert(cls.reasoning_trace[0].iteration == 1, "first step iteration=1")
@@ -573,7 +589,7 @@ def test_alert_classification_passthrough_fields() -> None:
 
     alert = _make_alert(src_ip="10.99.99.1")
     provider = MockProvider([_final_answer_xml()])
-    agent = ReActAgent(provider, _registry_with_stub(), max_iterations=3)
+    agent = _make_agent(provider, _registry_with_stub(), max_iterations=3)
     cls = agent.classify(alert)
 
     _assert(cls.src_ip == "10.99.99.1", "src_ip passed through")
@@ -581,6 +597,121 @@ def test_alert_classification_passthrough_fields() -> None:
     _assert(cls.signature_id == alert.signature_id, "signature_id passed through")
     _assert(cls.dst_ip == alert.dst_ip, "dst_ip passed through")
     _assert(cls.alert_id == "42", "alert_id derived from flow_id")
+
+
+# ---------------------------------------------------------------------------
+# Auto-enrichment tests (Option F hybrid)
+# ---------------------------------------------------------------------------
+
+def _registry_with_all_three_enrichment_tools() -> ToolRegistry:
+    """Registry with stubs for the three auto-enrichment tools."""
+    r = ToolRegistry()
+    r.register(_stub_tool("get_alert_history", returns={"prior_alerts": 3}))
+    r.register(_stub_tool("lookup_environment_context", returns={"match_found": False}))
+    r.register(_stub_tool("get_attack_pattern_stats", returns={"total_alerts": 12}))
+    return r
+
+
+def test_auto_enrichment_runs_three_tools_for_known_attack_type() -> None:
+    _section("auto-enrichment: runs 3 tools when attack_type recognised")
+
+    provider = MockProvider([_final_answer_xml()])
+    agent = ReActAgent(
+        provider, _registry_with_all_three_enrichment_tools(),
+        max_iterations=3, auto_enrichment=True,
+    )
+    # SQL Injection signature -> attack_type='SQLi' (known)
+    cls = agent.classify(_make_alert(signature="SQL Injection Attempt"))
+
+    system_steps = [s for s in cls.reasoning_trace if s.source == "system"]
+    actions = [s.action for s in system_steps]
+    _assert(len(system_steps) == 3, "3 system enrichment steps", str(actions))
+    _assert("get_alert_history" in actions, "get_alert_history called")
+    _assert("lookup_environment_context" in actions, "lookup_environment_context called")
+    _assert("get_attack_pattern_stats" in actions, "get_attack_pattern_stats called")
+    _assert(cls.tool_calls == 3, "tool_calls field counts enrichment", str(cls.tool_calls))
+
+
+def test_auto_enrichment_skips_pattern_stats_for_other_attack_type() -> None:
+    _section("auto-enrichment: pattern_stats skipped when attack_type == 'Other'")
+
+    provider = MockProvider([_final_answer_xml()])
+    agent = ReActAgent(
+        provider, _registry_with_all_three_enrichment_tools(),
+        max_iterations=3, auto_enrichment=True,
+    )
+    # Generic alert -> extract_attack_type returns 'Other'
+    cls = agent.classify(_make_alert(signature="some generic alert text"))
+
+    system_actions = [s.action for s in cls.reasoning_trace if s.source == "system"]
+    _assert(len(system_actions) == 2, "2 enrichment steps (no pattern_stats)", str(system_actions))
+    _assert("get_attack_pattern_stats" not in system_actions, "pattern_stats skipped for Other")
+
+
+def test_auto_enrichment_steps_have_iteration_zero() -> None:
+    _section("auto-enrichment: steps marked iteration=0, source='system'")
+
+    provider = MockProvider([_final_answer_xml()])
+    agent = ReActAgent(
+        provider, _registry_with_all_three_enrichment_tools(),
+        max_iterations=3, auto_enrichment=True,
+    )
+    cls = agent.classify(_make_alert(signature="SQL Injection"))
+
+    system_steps = [s for s in cls.reasoning_trace if s.source == "system"]
+    for s in system_steps:
+        _assert(s.iteration == 0, f"iteration=0 for system step {s.action}", str(s.iteration))
+        _assert(s.source == "system", f"source='system' for {s.action}")
+        _assert(s.observation is not None, f"observation captured for {s.action}")
+
+
+def test_auto_enrichment_off_no_system_steps() -> None:
+    _section("auto-enrichment: disabled -> no system steps")
+
+    provider = MockProvider([_final_answer_xml()])
+    agent = ReActAgent(
+        provider, _registry_with_all_three_enrichment_tools(),
+        max_iterations=3, auto_enrichment=False,
+    )
+    cls = agent.classify(_make_alert(signature="SQL Injection"))
+
+    system_steps = [s for s in cls.reasoning_trace if s.source == "system"]
+    _assert(len(system_steps) == 0, "no system steps when auto_enrichment=False")
+    _assert(cls.tool_calls == 0, "tool_calls=0 when no enrichment + no LLM tools")
+
+
+def test_auto_enrichment_skips_unregistered_tools() -> None:
+    _section("auto-enrichment: silently skips tools not in registry")
+
+    provider = MockProvider([_final_answer_xml()])
+    # Registry has only get_alert_history; others missing
+    agent = ReActAgent(
+        provider, _registry_with_stub(),  # only get_alert_history
+        max_iterations=3, auto_enrichment=True,
+    )
+    cls = agent.classify(_make_alert(signature="SQL Injection"))
+
+    system_actions = [s.action for s in cls.reasoning_trace if s.source == "system"]
+    _assert(system_actions == ["get_alert_history"], "only registered tool called",
+            str(system_actions))
+
+
+def test_auto_enrichment_results_visible_to_llm() -> None:
+    _section("auto-enrichment: observations injected into LLM prompt")
+
+    provider = MockProvider([_final_answer_xml()])
+    agent = ReActAgent(
+        provider, _registry_with_all_three_enrichment_tools(),
+        max_iterations=3, auto_enrichment=True,
+    )
+    agent.classify(_make_alert(signature="SQL Injection"))
+
+    # The MockProvider records every prompt it sees
+    _assert(len(provider.calls) >= 1, "provider was called at least once")
+    full_prompt = provider.calls[-1]
+    _assert("system_enrichment" in full_prompt, "enrichment block present in prompt")
+    _assert("prior_alerts" in full_prompt or "match_found" in full_prompt,
+            "tool results visible in prompt body")
 
 
 # ---------------------------------------------------------------------------
@@ -613,6 +744,13 @@ def main() -> int:
         test_empty_tool_registry_works,
         test_reasoning_trace_field_ordering,
         test_alert_classification_passthrough_fields,
+        # Auto-enrichment (Option F)
+        test_auto_enrichment_runs_three_tools_for_known_attack_type,
+        test_auto_enrichment_skips_pattern_stats_for_other_attack_type,
+        test_auto_enrichment_steps_have_iteration_zero,
+        test_auto_enrichment_off_no_system_steps,
+        test_auto_enrichment_skips_unregistered_tools,
+        test_auto_enrichment_results_visible_to_llm,
     ]
 
     for t in tests:

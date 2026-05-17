@@ -48,7 +48,7 @@ from models import (
     ReasoningStep,
     extract_attack_type,
 )
-from tool_registry import ToolRegistry
+from tool_registry import ToolRegistry, ToolResult
 
 # Reuse the existing single-shot helpers (prompt builders + JSON validators).
 # They are pure functions, stable, and shared across both paths.
@@ -127,20 +127,22 @@ fences. No prose outside the tags."""
 
 _REACT_TOOL_USE_GUIDANCE = """WHEN TO USE TOOLS:
 
-Only call a tool when the alert is genuinely ambiguous and additional
-context would change your verdict.
+The agent runtime automatically performs pre-classification enrichment
+before you see the alert — it pre-calls get_alert_history,
+lookup_environment_context, and (when attack type is recognised)
+get_attack_pattern_stats. Their results appear at the top of the user
+message inside <system_enrichment> blocks. Treat these as authoritative
+context; do NOT re-call those tools for the same arguments.
 
-- For OBVIOUS attacks (clear UNION SELECT payload, explicit <script>
-  injection, command injection patterns), output <final_answer>
-  immediately. DO NOT call tools.
-- For ALERTS WITH UNKNOWN IPs or generic signatures, consider
-  lookup_environment_context.
-- For POSSIBLE CAMPAIGNS, consider get_alert_history to see if the source
-  IP is a repeat offender.
-- For SEVERITY CALIBRATION on a borderline case, consider
-  get_attack_pattern_stats.
+You may issue your own additional tool calls when:
+- A different argument is genuinely useful (e.g. lookup_environment_context
+  for the destination IP rather than the source).
+- Pre-enrichment came back empty and you suspect a different lookup
+  would help.
 
-Keep tool calls under 2 per alert. Extra calls waste time."""
+Otherwise, read the enrichment results and output <final_answer> directly.
+
+Keep your own tool calls under 2 per alert. Extra calls waste time."""
 
 
 _REACT_FEW_SHOT_EXAMPLES = """EXAMPLES
@@ -257,6 +259,7 @@ class ReActAgent:
         total_budget_seconds: float = 30.0,
         max_retries_on_parse_fail: int = 1,
         include_lab_context_in_fallback: bool = True,
+        auto_enrichment: bool = True,
     ):
         """
         Args:
@@ -274,11 +277,12 @@ class ReActAgent:
             include_lab_context_in_fallback: Whether the single-shot
                                             fallback prompt includes the
                                             legacy lab-context block.
-                                            (When ReAct is used, that block
-                                            is replaced by the
-                                            lookup_environment_context tool,
-                                            so the fallback can decide
-                                            independently.)
+            auto_enrichment:                Enable Option F hybrid: run
+                                            deterministic tools (history,
+                                            env lookup, attack stats) before
+                                            the LLM. Default True. Set
+                                            False for evaluation ablation
+                                            or to test pure-LLM behaviour.
         """
         self._provider = provider
         self._tools = tools
@@ -287,6 +291,7 @@ class ReActAgent:
         self.total_budget_seconds = float(total_budget_seconds)
         self.max_retries_on_parse_fail = max(0, int(max_retries_on_parse_fail))
         self._include_lab_context_in_fallback = include_lab_context_in_fallback
+        self._auto_enrichment = bool(auto_enrichment)
 
         # System prompt is built once at init. Tool registry is treated as
         # immutable after agent construction — register all tools before
@@ -308,19 +313,38 @@ class ReActAgent:
     def classify(self, alert: AlertRecord) -> AlertClassification:
         """Run the ReAct loop. Always returns an AlertClassification.
 
+        Hybrid policy (Option F from AGENT_DESIGN §5.5):
+          1. Run automatic pre-enrichment — deterministic tool calls before
+             the LLM ever sees the alert. Results go into reasoning_trace
+             marked source='system' at iteration=0.
+          2. Run the LLM ReAct loop. The LLM sees the pre-enrichment results
+             as observations and may emit further tool calls (iteration 1+).
+
+        This compensates for small-model tool-call adherence drift while
+        preserving the LLM's autonomous classification step.
+
         Failure paths:
           - LLM unreachable / total budget exceeded -> partial/error
           - All parse attempts fail -> single-shot fallback
           - Single-shot fallback fails -> error classification
         """
         start_time = time.monotonic()
-        reasoning_trace: List[ReasoningStep] = []
-        parse_failure_count = 0
-        tool_calls = 0
 
         alert_id = str(alert.flow_id) if alert.flow_id else str(uuid.uuid4())
         attack_type = extract_attack_type(alert.signature)
         initial_user_prompt = _build_singleshot_user_prompt(alert)
+
+        # --- Auto-enrichment phase (controlled by auto_enrichment flag) ---
+        reasoning_trace: List[ReasoningStep] = []
+        if self._auto_enrichment:
+            reasoning_trace = self._run_auto_enrichment(
+                alert=alert,
+                attack_type=attack_type,
+            )
+        tool_calls = sum(
+            1 for step in reasoning_trace if step.action and step.source == "system"
+        )
+        parse_failure_count = 0
 
         for iteration in range(1, self.max_iterations + 1):
             round_start = time.monotonic()
@@ -397,6 +421,81 @@ class ReActAgent:
             parse_failure_count=parse_failure_count,
             tool_calls=tool_calls,
         )
+
+    # ------------------------------------------------------------------
+    # Auto-enrichment (system-driven, deterministic, runs once per alert)
+    # ------------------------------------------------------------------
+
+    def _run_auto_enrichment(
+        self,
+        alert: AlertRecord,
+        attack_type: str,
+    ) -> List[ReasoningStep]:
+        """Deterministically run enrichment tools before the LLM sees the alert.
+
+        Implements Option F (hybrid auto-enrichment + LLM exploration). Each
+        enrichment call becomes a ReasoningStep at iteration=0 with
+        source='system' so the dashboard and evaluation harness can
+        distinguish automatic enrichment from LLM-driven decisions.
+
+        Tool selection policy:
+          - get_alert_history(src_ip): always, if registered
+          - lookup_environment_context(src_ip): always, if registered
+          - get_attack_pattern_stats(attack_type): only when attack_type is a
+            recognised label (not "Other")
+
+        Never raises. Tool errors are captured as observation strings, the
+        loop continues.
+        """
+        steps: List[ReasoningStep] = []
+
+        def _record(
+            tool_name: str,
+            args: dict,
+            thought: str,
+        ) -> None:
+            if not self._tools.has(tool_name):
+                return
+            t0 = time.monotonic()
+            result: ToolResult = self._tools.call(
+                tool_name, args, timeout_seconds=self.tool_timeout_seconds,
+            )
+            steps.append(ReasoningStep(
+                iteration=0,
+                thought=thought,
+                action=tool_name,
+                action_input=dict(args),
+                observation=result.to_observation_json(),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                source="system",
+            ))
+
+        # 1. Prior activity from this source IP
+        if alert.src_ip:
+            _record(
+                "get_alert_history",
+                {"src_ip": alert.src_ip, "hours": 24},
+                "Auto-enrichment: checking prior activity from source IP "
+                f"{alert.src_ip}",
+            )
+
+        # 2. Environment classification for the source IP
+        if alert.src_ip:
+            _record(
+                "lookup_environment_context",
+                {"query": alert.src_ip},
+                "Auto-enrichment: looking up source IP environment context",
+            )
+
+        # 3. Attack-type frequency stats (only when the type is known)
+        if attack_type and attack_type != "Other":
+            _record(
+                "get_attack_pattern_stats",
+                {"attack_type": attack_type, "hours": 24},
+                f"Auto-enrichment: looking up recent {attack_type} activity",
+            )
+
+        return steps
 
     # ------------------------------------------------------------------
     # Single-round handling
@@ -535,18 +634,47 @@ class ReActAgent:
     ) -> str:
         """Build the user-side prompt for the next round.
 
-        The accumulated trace is rendered as alternating
-        thought/action/action_input/observation tags so the model sees its
-        own prior steps and can build on them.
+        System-driven enrichment steps (source='system', iteration=0) are
+        wrapped in <system_enrichment> blocks so the model understands they
+        are pre-computed observations rather than its own past actions.
+
+        Model-driven steps (source='model', iteration>=1) are rendered as
+        the standard ReAct thought/action/observation tag sequence.
         """
         parts: List[str] = [initial_user_prompt]
+
+        # 1. System-driven enrichment block (if any)
+        system_steps = [s for s in accumulated if s.source == "system"]
+        if system_steps:
+            parts.append(
+                "\nThe following observations were automatically gathered "
+                "by the agent runtime before classification. Use them as "
+                "context for your decision."
+            )
+            for step in system_steps:
+                args_str = (
+                    json.dumps(step.action_input)
+                    if step.action_input is not None else "{}"
+                )
+                parts.append(
+                    f"<system_enrichment>\n"
+                    f"  tool: {step.action}\n"
+                    f"  args: {args_str}\n"
+                    f"  result: {step.observation}\n"
+                    f"</system_enrichment>"
+                )
+
+        # 2. Model-driven trace (if any)
         for step in accumulated:
+            if step.source != "model":
+                continue
             if step.thought:
                 parts.append(f"<thought>{step.thought}</thought>")
             if step.action:
                 parts.append(f"<action>{step.action}</action>")
                 args_str = (
-                    json.dumps(step.action_input) if step.action_input is not None else "{}"
+                    json.dumps(step.action_input)
+                    if step.action_input is not None else "{}"
                 )
                 parts.append(f"<action_input>{args_str}</action_input>")
             if step.observation is not None:

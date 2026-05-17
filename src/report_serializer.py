@@ -480,6 +480,7 @@ def _serialise_alert_analyses(
                     "observation": step.observation,
                     "duration_ms": step.duration_ms,
                     "parse_error": step.parse_error,
+                    "source": getattr(step, "source", "model"),
                 }
                 for step in trace
             ]

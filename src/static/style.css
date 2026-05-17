@@ -566,6 +566,22 @@ header {
   background: rgba(0, 255, 200, 0.08);
 }
 
+/* System-driven (auto-enrichment) steps look distinct from LLM steps. */
+.reasoning-step.is-system .reasoning-step-badge {
+  border-color: var(--accent2, #ff007f);
+  color: var(--accent2, #ff007f);
+  background: rgba(255, 0, 127, 0.05);
+  font-size: 0.55rem;
+  letter-spacing: 0.1em;
+}
+.reasoning-step.is-system .reasoning-action {
+  border-left-color: var(--accent2, #ff007f);
+}
+.reasoning-step.is-system .reasoning-thought {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
 .reasoning-step-body {
   display: flex;
   flex-direction: column;

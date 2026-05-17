@@ -34,14 +34,23 @@ class ReasoningStep:
     Captured for two purposes:
       1. Dashboard display — shows the marker / user how the agent reasoned.
       2. Evaluation — lets us audit when the agent uses tools and why.
+
+    `source` distinguishes who issued the step:
+      - "model"  → emitted by the LLM during the ReAct loop
+      - "system" → automatic pre-enrichment done deterministically by the
+                   agent before the LLM call (Option F hybrid policy).
+
+    `iteration = 0` is the convention for system-driven enrichment steps;
+    LLM-driven iterations start at 1.
     """
-    iteration: int                          # 1-indexed (first round = 1)
+    iteration: int                          # 0 = system enrichment, 1+ = LLM round
     thought: str                            # model's stated reasoning
     action: Optional[str]                   # tool name, or None on final answer
     action_input: Optional[Dict]            # tool arguments (parsed JSON)
     observation: Optional[str]              # tool output JSON; None on final
     duration_ms: int                        # wall-clock for LLM + tool exec
     parse_error: Optional[str] = None       # set if this round's output failed to parse
+    source: str = "model"                   # "model" | "system"
 
 
 # ---------------------------------------------------------------------------

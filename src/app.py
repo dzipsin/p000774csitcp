@@ -127,6 +127,7 @@ AGENT_MAX_ITERATIONS    = int(_agent_cfg.get("max_iterations", 3))
 AGENT_TOOL_TIMEOUT      = float(_agent_cfg.get("tool_timeout_seconds", 5.0))
 AGENT_TOTAL_BUDGET      = float(_agent_cfg.get("total_budget_seconds", 30.0))
 AGENT_TRACE_ENABLED     = bool(_agent_cfg.get("reasoning_trace_enabled", True))
+AGENT_AUTO_ENRICHMENT   = bool(_agent_cfg.get("auto_enrichment", True))
 
 _agent_tools_cfg        = _agent_cfg.get("tools", {})
 AGENT_TOOLS_ENABLED     = {
@@ -256,10 +257,12 @@ try:
                 tool_timeout_seconds=AGENT_TOOL_TIMEOUT,
                 total_budget_seconds=AGENT_TOTAL_BUDGET,
                 include_lab_context_in_fallback=INCLUDE_LAB_CONTEXT,
+                auto_enrichment=AGENT_AUTO_ENRICHMENT,
             )
             log.info(
-                "ReAct agent enabled: tools=%s, max_iter=%d, budget=%.0fs",
+                "ReAct agent enabled: tools=%s, max_iter=%d, budget=%.0fs, auto_enrichment=%s",
                 tool_registry.list_names(), AGENT_MAX_ITERATIONS, AGENT_TOTAL_BUDGET,
+                AGENT_AUTO_ENRICHMENT,
             )
         except Exception as agent_err:  # noqa: BLE001 — degrade gracefully
             log.warning(

@@ -535,7 +535,10 @@ function _renderReasoningTrace(analyses) {
 
 function _renderReasoningStep(step) {
   const isFinal = !step.action;
+  const isSystem = (step.source === 'system');
   const iteration = step.iteration ?? '?';
+  // System enrichment steps display "A" (auto) badge instead of iteration number
+  const badgeLabel = isSystem ? 'A' : iteration;
   const duration = step.duration_ms ? `${step.duration_ms}ms` : '';
   const errorBlock = step.parse_error
     ? `<div class="reasoning-parse-error">⚠ parse error: ${esc(step.parse_error)}</div>`
@@ -558,13 +561,19 @@ function _renderReasoningStep(step) {
   if (step.observation != null) {
     bodyHTML += `<div class="reasoning-observation">${esc(step.observation)}</div>`;
   }
-  if (isFinal && !errorBlock) {
+  if (isFinal && !errorBlock && !isSystem) {
     bodyHTML += `<div class="reasoning-final-marker">final answer ✓</div>`;
   }
 
+  const classNames = [
+    'reasoning-step',
+    isFinal ? 'is-final' : '',
+    isSystem ? 'is-system' : 'is-model',
+  ].filter(Boolean).join(' ');
+
   return `
-    <div class="reasoning-step ${isFinal ? 'is-final' : ''}">
-      <div class="reasoning-step-badge">${esc(iteration)}</div>
+    <div class="${classNames}">
+      <div class="reasoning-step-badge" title="${isSystem ? 'Auto-enrichment' : 'LLM iteration ' + iteration}">${esc(badgeLabel)}</div>
       <div class="reasoning-step-body">
         ${bodyHTML}
         ${errorBlock}
