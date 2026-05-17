@@ -400,7 +400,10 @@ function buildIncidentDetail(report) {
   metaHTML += `<dt>Attack stage</dt><dd>${esc(desc.overall_attack_stage || '—')}</dd>`;
   metaHTML += `<dt>Vectors</dt><dd>${esc((desc.attack_vectors || []).join(', ') || '—')}</dd>`;
   metaHTML += `<dt>True positives</dt><dd>${esc(cc.true_positive ?? 0)}</dd>`;
-  metaHTML += `<dt>False positives</dt><dd>${esc(cc.false_positive ?? 0)}</dd>`;
+  // Serializer key is `likely_false_positive` (matches classification enum);
+  // tolerate the legacy `false_positive` shape too in case any older cached
+  // report is still in memory.
+  metaHTML += `<dt>False positives</dt><dd>${esc(cc.likely_false_positive ?? cc.false_positive ?? 0)}</dd>`;
   if (cc.error) metaHTML += `<dt>Errors</dt><dd>${esc(cc.error)}</dd>`;
   metaHTML += `<dt>First seen</dt><dd>${esc(sum.first_seen || '—')}</dd>`;
   metaHTML += `<dt>Last seen</dt><dd>${esc(sum.last_seen || '—')}</dd>`;

@@ -767,6 +767,23 @@ class ReportGenerator:
             detected_attacks=detected_attacks,
         )
 
+        # MITRE tactic override — deterministic correction for known attack
+        # types the small LLM commonly mis-tags. Honest engineering:
+        # rule-based for what we KNOW, LLM judgment for everything else.
+        original_tactic = stage2.get("overall_attack_stage", "")
+        fixed_tactic, was_overridden = _override_mitre_tactic(
+            detected_attacks=detected_attacks,
+            current_tactic=original_tactic,
+            incident_alerts=incident.alerts,
+        )
+        if was_overridden:
+            log.info(
+                "Stage 2 MITRE tactic overridden: '%s' -> '%s' "
+                "(detected_attacks=%s)",
+                original_tactic, fixed_tactic, detected_attacks,
+            )
+            stage2["overall_attack_stage"] = fixed_tactic
+
         # --- Rule-based fields ---
         data_sensitivity = _data_sensitivity_from_alerts(incident.alerts)
         iocs = _build_iocs(incident.alerts)
@@ -1292,6 +1309,76 @@ class ReportGenerator:
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
+
+# Rule-based MITRE ATT&CK tactic override. qwen2.5:3b often labels SQLi /
+# XSS incidents as "Reconnaissance" or "Execution" despite the explicit
+# mapping table in the Stage 2 prompt. This deterministic post-process
+# corrects the tactic when known attack types are present.
+
+_ATTACK_TYPE_TO_MITRE = {
+    "SQLi":             "Initial Access",
+    "XSS":              "Initial Access",
+    "CommandInjection": "Execution",
+    "PathTraversal":    "Discovery",
+    "FileInclusion":    "Initial Access",
+    "BruteForce":       "Credential Access",
+    "CSRF":             "Initial Access",
+    "WebAttack":        "Initial Access",
+    "Reconnaissance":   "Reconnaissance",
+}
+
+# Higher = "more severe / later-stage". Used to pick a single tactic when
+# multiple attack types are present in an incident.
+_MITRE_PRIORITY = {
+    "Credential Access":  5,
+    "Execution":          4,
+    "Initial Access":     3,
+    "Discovery":          2,
+    "Persistence":        3,
+    "Reconnaissance":     1,
+}
+
+
+def _override_mitre_tactic(
+    detected_attacks: List[str],
+    current_tactic: str,
+    incident_alerts: Optional[List[AlertRecord]] = None,
+) -> Tuple[str, bool]:
+    """Override the LLM's MITRE tactic when alerts contain known attack types.
+
+    Logic:
+      1. Map each detected attack type to its canonical MITRE tactic.
+      2. If SQLi present AND any alert signature mentions USER/PASS,
+         bump to "Credential Access" (subsumes Initial Access).
+      3. Pick the highest-priority tactic from the candidate set.
+      4. If the chosen tactic differs from current_tactic, override.
+
+    Returns (final_tactic, was_overridden).
+    """
+    if not detected_attacks:
+        return current_tactic, False
+
+    candidates: set = set()
+    for atk in detected_attacks:
+        mapped = _ATTACK_TYPE_TO_MITRE.get(atk)
+        if mapped:
+            candidates.add(mapped)
+
+    if not candidates:
+        return current_tactic, False
+
+    # SQLi targeting credentials -> bump to Credential Access
+    if "SQLi" in detected_attacks and incident_alerts:
+        for a in incident_alerts:
+            sig_upper = (a.signature or "").upper()
+            if "USER" in sig_upper or "PASS" in sig_upper or "CREDENTIAL" in sig_upper:
+                candidates.add("Credential Access")
+                candidates.discard("Initial Access")
+                break
+
+    chosen = max(candidates, key=lambda t: _MITRE_PRIORITY.get(t, 0))
+    return chosen, chosen != current_tactic
+
 
 _SEVERITY_ORDER = {"High": 3, "Medium": 2, "Low": 1}
 

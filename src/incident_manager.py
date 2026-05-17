@@ -239,14 +239,20 @@ class IncidentManager:
             self._reset_debounce_timer_locked(incident)
 
     def force_regenerate_all(self) -> int:
-        """Immediately regenerate all open incidents, bypassing debounce.
+        """Immediately regenerate all in-memory incidents, bypassing debounce.
 
-        Useful for the "Force Regenerate" button. Returns the count of
-        incidents for which regeneration was triggered.
+        Regenerates BOTH open and recently-closed incidents. Useful when the
+        operator changes the prompt / model / config and wants to re-run
+        classification against incidents that have already closed (which
+        otherwise live in `_recently_closed` until evicted by the sweeper).
+
+        Returns the count of incidents for which regeneration was triggered.
         """
         with self._lock:
             open_incidents = list(self._open_incidents.values())
-            # Cancel pending debounce timers for these incidents
+            closed_incidents = list(self._recently_closed.values())
+            # Cancel pending debounce timers for open incidents only
+            # (closed ones don't have active timers)
             for inc in open_incidents:
                 timer = self._debounce_timers.pop(inc.incident_id, None)
                 if timer is not None:
@@ -256,10 +262,16 @@ class IncidentManager:
                         pass
 
         # Fire regenerations outside the lock
-        for inc in open_incidents:
+        all_incidents = open_incidents + closed_incidents
+        for inc in all_incidents:
             self._trigger_regenerate(inc.incident_id)
 
-        return len(open_incidents)
+        log.info(
+            "force_regenerate_all triggered for %d incidents "
+            "(%d open + %d recently-closed)",
+            len(all_incidents), len(open_incidents), len(closed_incidents),
+        )
+        return len(all_incidents)
 
     def get_open_incidents(self) -> List[Incident]:
         """Return a snapshot list of currently open incidents."""

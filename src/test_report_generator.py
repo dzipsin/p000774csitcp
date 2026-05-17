@@ -40,7 +40,7 @@ from log_monitor import AlertRecord
 from models import Incident, extract_attack_type
 from model_provider import ModelProvider, ProviderType
 from storage import ReportStorage
-from report_generator import ReportGenerator
+from report_generator import ReportGenerator, _override_mitre_tactic
 
 logging.basicConfig(
     level=logging.WARNING,  # keep test output clean; bump to INFO if debugging
@@ -695,6 +695,134 @@ def test_report_version_in_output():
 
 
 # ============================================================================
+# MITRE tactic override (rule-based post-process on Stage 2)
+# ============================================================================
+
+def test_mitre_override_sqli_to_initial_access():
+    print("\n=== Test 21: MITRE override: SQLi (no creds) -> Initial Access ===")
+    fixed, overridden = _override_mitre_tactic(
+        detected_attacks=["SQLi"],
+        current_tactic="Reconnaissance",
+        incident_alerts=[_make_alert(signature="ET WEB_SERVER SQL Injection generic")],
+    )
+    assert fixed == "Initial Access", f"Expected Initial Access, got '{fixed}'"
+    assert overridden is True
+    print("    PASS: SQLi alert overrides Reconnaissance -> Initial Access")
+
+
+def test_mitre_override_sqli_creds_to_credential_access():
+    print("\n=== Test 22: MITRE override: SQLi targeting USER -> Credential Access ===")
+    fixed, overridden = _override_mitre_tactic(
+        detected_attacks=["SQLi"],
+        current_tactic="Reconnaissance",
+        incident_alerts=[_make_alert(
+            signature="ET WEB_SERVER SELECT USER SQL Injection Attempt in URI",
+        )],
+    )
+    assert fixed == "Credential Access", f"Expected Credential Access, got '{fixed}'"
+    assert overridden is True
+    print("    PASS: SQLi targeting USER bumped to Credential Access")
+
+
+def test_mitre_override_xss_to_initial_access():
+    print("\n=== Test 23: MITRE override: XSS -> Initial Access ===")
+    fixed, overridden = _override_mitre_tactic(
+        detected_attacks=["XSS"],
+        current_tactic="Execution",
+        incident_alerts=[_make_alert(signature="ET WEB_SERVER XSS Script tag")],
+    )
+    assert fixed == "Initial Access", f"Expected Initial Access, got '{fixed}'"
+    assert overridden is True
+    print("    PASS: XSS overrides Execution -> Initial Access")
+
+
+def test_mitre_override_command_injection_to_execution():
+    print("\n=== Test 24: MITRE override: CommandInjection -> Execution ===")
+    fixed, overridden = _override_mitre_tactic(
+        detected_attacks=["CommandInjection"],
+        current_tactic="Reconnaissance",
+    )
+    assert fixed == "Execution", f"Expected Execution, got '{fixed}'"
+    assert overridden is True
+    print("    PASS: CommandInjection -> Execution")
+
+
+def test_mitre_override_no_change_when_already_correct():
+    print("\n=== Test 25: MITRE override: no change when already correct ===")
+    fixed, overridden = _override_mitre_tactic(
+        detected_attacks=["XSS"],
+        current_tactic="Initial Access",
+        incident_alerts=[],
+    )
+    assert fixed == "Initial Access"
+    assert overridden is False, "Should not flag override when tactic unchanged"
+    print("    PASS: no override when tactic already matches")
+
+
+def test_mitre_override_no_change_for_empty_attacks():
+    print("\n=== Test 26: MITRE override: empty detected_attacks -> no change ===")
+    fixed, overridden = _override_mitre_tactic(
+        detected_attacks=[],
+        current_tactic="Execution",
+    )
+    assert fixed == "Execution"
+    assert overridden is False
+    print("    PASS: no override with empty detected_attacks")
+
+
+def test_mitre_override_mixed_attacks_picks_highest_priority():
+    print("\n=== Test 27: MITRE override: SQLi+XSS+CommandInjection picks Execution ===")
+    fixed, overridden = _override_mitre_tactic(
+        detected_attacks=["SQLi", "XSS", "CommandInjection"],
+        current_tactic="Reconnaissance",
+        incident_alerts=[_make_alert(signature="generic SQLi")],
+    )
+    # CommandInjection -> Execution (priority 4) > Initial Access (priority 3)
+    assert fixed == "Execution", f"Expected Execution, got '{fixed}'"
+    assert overridden is True
+    print("    PASS: highest-priority tactic chosen from mixed attacks")
+
+
+def test_mitre_override_integrated_in_generate():
+    print("\n=== Test 28: MITRE override applied in generate() output ===")
+    # Force Stage 2 to return "Reconnaissance" even though alert is SQLi
+    # targeting credentials — override should bump to Credential Access.
+    provider = MockProvider()
+    provider.set_stage1_responses([
+        json.dumps({
+            "classification": "true_positive",
+            "severity": "High",
+            "summary": "SQLi targeting credentials",
+            "recommendation": "block_source_ip",
+            "reasoning": "Clear UNION SELECT targeting users table.",
+        }),
+    ])
+    provider.set_stage2_response(json.dumps({
+        "overview": "An incident occurred.",
+        "attack_vectors": ["URL parameter"],
+        "overall_attack_stage": "Reconnaissance",
+        "ai_suggestions": ["Block the IP"],
+        "exposure_detected": True,
+        "exposure_types": ["user credentials"],
+        "affected_systems": ["web application"],
+        "exposure_summary": "Possible credential exposure.",
+        "impact_assessment": "High if successful.",
+    }))
+    gen = ReportGenerator(provider=provider, summary_mode="llm")
+
+    incident = _make_incident([_make_alert(
+        signature="ET WEB_SERVER SELECT USER SQL Injection Attempt in URI",
+    )])
+    report = gen.generate(incident)
+
+    actual = report.incident_summary_description.overall_attack_stage
+    assert actual == "Credential Access", (
+        f"Expected override to 'Credential Access', got '{actual}'"
+    )
+    print("    PASS: override flows into IncidentReport.incident_summary_description")
+
+
+# ============================================================================
 # Runner
 # ============================================================================
 
@@ -720,6 +848,15 @@ def main():
         test_confidence_score_ranges,
         test_stage2_coerces_bad_list_fields,
         test_report_version_in_output,
+        # MITRE override (P3a follow-up)
+        test_mitre_override_sqli_to_initial_access,
+        test_mitre_override_sqli_creds_to_credential_access,
+        test_mitre_override_xss_to_initial_access,
+        test_mitre_override_command_injection_to_execution,
+        test_mitre_override_no_change_when_already_correct,
+        test_mitre_override_no_change_for_empty_attacks,
+        test_mitre_override_mixed_attacks_picks_highest_priority,
+        test_mitre_override_integrated_in_generate,
     ]
 
     failed = []
