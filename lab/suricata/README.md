@@ -28,27 +28,36 @@ roll back if anything goes wrong.
 ```bash
 # (Inside the Kali VM)
 
-# 1. Copy file
-sudo cp /media/sf_soc-triage/p000774csitcp/lab/suricata/xss_alerts.rules \
-        /etc/suricata/rules/xss_alerts.rules
+# 1. Find where Suricata looks for rule files on THIS install
+sudo grep "default-rule-path" /etc/suricata/suricata.yaml
+# Common values: /var/lib/suricata/rules  (recent Kali)
+#                /etc/suricata/rules      (some other distros)
 
-# 2. Wire into the loaded ruleset list
+# 2. Copy file into THAT directory. On recent Kali this is:
+sudo cp /media/sf_soc-triage/p000774csitcp/lab/suricata/xss_alerts.rules \
+        /var/lib/suricata/rules/xss_alerts.rules
+# If your default-rule-path differs, substitute it for /var/lib/suricata/rules.
+
+# 3. Wire into the loaded ruleset list
 sudo nano /etc/suricata/suricata.yaml
 # Find the `rule-files:` block (search /^rule-files:) and add:
 #   - xss_alerts.rules
 
-# 3. Validate config + rules parse cleanly BEFORE restart
+# 4. Validate config + rules parse cleanly BEFORE restart
 sudo suricata -T -c /etc/suricata/suricata.yaml
 
 # Expect: "Configuration provided was successfully loaded. Exiting."
-# If it errors, do NOT restart — fix the issue first.
+# Pre-existing ET Open rules that fail with "Complete IP space negated"
+# (e.g. sid:2011802, sid:2000328, sid:2002087) are noise — already broken
+# before custom rules, do NOT block deployment.
+# If a NEW error mentions xss_alerts.rules, do NOT restart — fix first.
 
-# 4. Reload (or restart) Suricata
+# 5. Reload (or restart) Suricata
 sudo systemctl reload suricata
 # Or, if reload is not supported:
 sudo systemctl restart suricata
 
-# 5. Verify the rules loaded
+# 6. Verify the rules loaded
 sudo grep "rules loaded" /var/log/suricata/suricata.log | tail -1
 # Should show a count +58 over the previous load
 ```
