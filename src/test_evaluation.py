@@ -404,11 +404,104 @@ def test_report_writer():
     print(f"    PASS: report written ({len(content)} chars)")
 
 
+def test_combined_report_builds_staircase():
+    print("\n=== Test 4: Combined ablation report builds across mock runs ===")
+
+    import tempfile
+    from evaluation.run_combined_report import (
+        load_raw_results,
+        order_runs,
+        aggregate_step_metrics,
+        render_markdown,
+    )
+
+    indir = Path(tempfile.mkdtemp(prefix="combined-eval-"))
+    try:
+        # Synthesise 3 reps for each of 3 steps. Metrics improve across
+        # the staircase so the delta column should read positive.
+        steps = [
+            ("baseline",     0.80, 0.70, 0.75, 0.78),
+            ("react",        0.90, 0.85, 0.87, 0.86),
+            ("custom_rules", 0.95, 0.95, 0.95, 0.93),
+        ]
+
+        for step, precision, recall, f1, accuracy in steps:
+            for rep in range(3):
+                fname = f"p6_{step}_run{rep}_20260518_raw.json"
+                payload = {
+                    "label": f"p6_{step}_run{rep}",
+                    "timestamp": f"2026-05-18T10:{rep:02d}:00",
+                    "config": {"base_url": "x", "dashboard": "y", "repeats": 1,
+                               "settle_time": 30, "final_wait": 45},
+                    "config_dimensions": {"step": step,
+                                          "model": "qwen2.5:3b",
+                                          "agent_mode": "react"},
+                    "metrics": {
+                        "precision": precision,
+                        "recall": recall,
+                        "f1": f1,
+                        "accuracy": accuracy,
+                        "total_scenarios": 30,
+                        "matched_to_incident": 25,
+                        "tp_correct": 18,
+                        "fp_correct": 7,
+                        "classification_errors": 0,
+                    },
+                    "confusion_matrix": {},
+                    "scenario_results": [],
+                }
+                with open(indir / fname, "w", encoding="utf-8") as f:
+                    json.dump(payload, f)
+
+        # Add an unrelated run to confirm label_prefix filtering works
+        with open(indir / "other_unrelated_raw.json", "w", encoding="utf-8") as f:
+            json.dump({"label": "other", "timestamp": "x", "config": {},
+                       "metrics": {"precision": 0.0, "recall": 0.0, "f1": 0.0,
+                                   "accuracy": 0.0, "total_scenarios": 0,
+                                   "matched_to_incident": 0, "tp_correct": 0,
+                                   "fp_correct": 0, "classification_errors": 0},
+                       "confusion_matrix": {}, "scenario_results": []}, f)
+
+        # Load with prefix filter — should return 9 runs, not 10
+        runs = load_raw_results(indir, label_prefix="p6_")
+        assert len(runs) == 9, f"expected 9 prefixed runs, got {len(runs)}"
+
+        # Order them — staircase order
+        order = ["baseline", "react", "custom_rules"]
+        ordered = order_runs(runs, order)
+        assert len(ordered) == 9
+
+        # Aggregate one step
+        baseline_runs = [r for r in ordered
+                         if (r.get("config_dimensions") or {}).get("step") == "baseline"]
+        agg = aggregate_step_metrics(baseline_runs)
+        assert agg["reps"] == 3
+        assert abs(agg["f1_mean"] - 0.75) < 1e-9, f"f1_mean={agg['f1_mean']}"
+
+        # Render
+        outpath = indir / "combined.md"
+        render_markdown(ordered, order, outpath)
+        assert outpath.exists(), "combined report not written"
+        content = outpath.read_text(encoding="utf-8")
+        assert "staircase ablation" in content.lower(), "header missing"
+        assert "Baseline" in content, "baseline row missing"
+        assert "+ ReAct" in content, "react row missing"
+        assert "+ Custom XSS" in content, "custom_rules row missing"
+        # Delta column should show a positive change for react step
+        assert "+0.120" in content, f"expected +0.120 F1 delta, content was: {content[:500]}"
+
+        print(f"    PASS: combined report rendered ({len(content)} chars)")
+    finally:
+        import shutil
+        shutil.rmtree(indir, ignore_errors=True)
+
+
 def main():
     tests = [
         test_scenarios_fire_and_correlate,
         test_metrics_computation,
         test_report_writer,
+        test_combined_report_builds_staircase,
     ]
     failed = []
     for t in tests:
