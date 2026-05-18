@@ -99,7 +99,7 @@ these XML tags. Do not output prose outside the tags.
 
 To call a tool:
 
-<thought>brief reasoning about why this tool is needed</thought>
+<thought>state the SPECIFIC fact you don't yet know and which tool would supply it</thought>
 <action>tool_name</action>
 <action_input>{"param": "value"}</action_input>
 
@@ -111,14 +111,14 @@ You may then think again and either call another tool or finish.
 
 To finish:
 
-<thought>brief reasoning summarising your verdict</thought>
+<thought>SYNTHESISE the enrichment data already in the prompt — reference the concrete facts you can see. Do NOT write "let me check", "I should investigate", or "let me verify" — by the time you emit final_answer, no further checks are happening. Cite the prior_alert_count, env role, attack types seen, or specific signature wording in your reasoning.</thought>
 <final_answer>
 {
   "classification": "true_positive" | "likely_false_positive",
   "severity": "Low" | "Medium" | "High",
   "summary": "one sentence describing what this alert represents",
   "recommendation": "block_source_ip" | "escalate_tier2" | "continue_monitoring",
-  "reasoning": "2-3 sentences explaining your classification"
+  "reasoning": "2-3 sentences explaining your classification, citing CONCRETE facts from the enrichment data (e.g. 'prior_alert_count=14', 'env role=internal_database'), NOT generic statements"
 }
 </final_answer>
 
@@ -183,13 +183,31 @@ User alert:
 {"signature": "ET WEB_SERVER SQL Injection Attempt", "http_url": "/sqli/?id=1%20OR%201=1", "src_ip": "192.168.56.1"}
 
 Your response:
-<thought>SQLi attempt. Let me check if this IP has prior activity.</thought>
+<thought>SQLi attempt. Need to know the prior alert count from this source IP to decide if this is a one-off probe or sustained campaign.</thought>
 <action>get_alert_history</action>
 <action_input>{"src_ip": "192.168.56.1", "hours": 24}</action_input>
 <observation>{"total_prior_alerts": 14, "attack_types_seen": ["SQLi", "XSS"], "is_repeat_offender_this_session": true}</observation>
 <thought>14 prior alerts spanning SQLi and XSS — active multi-vector attacker.</thought>
 <final_answer>
 {"classification": "true_positive", "severity": "High", "summary": "SQLi probe from active attacker (14 prior alerts, multiple techniques)", "recommendation": "block_source_ip", "reasoning": "Source IP has 14 prior alerts across SQLi and XSS in last 24h — sustained multi-vector campaign. Block to interrupt."}
+</final_answer>
+
+--- Example 4: enrichment fully resolves the verdict — straight to final_answer (no extra tools) ---
+
+User alert (with system_enrichment blocks already provided by the runtime):
+{"signature": "ET WEB_SERVER SELECT USER SQL Injection Attempt in URI",
+ "http_url": "/vulnerabilities/sqli/?id=1' UNION SELECT user,password FROM users#",
+ "src_ip": "192.168.56.1", "dst_ip": "172.18.0.3"}
+
+System enrichment (already in your prompt):
+  - get_alert_history -> prior_alert_count=2, is_repeat_offender_this_session=true
+  - lookup_environment_context -> role=host_only_network, classification_hint=untrusted_source_likely_attacker
+  - get_attack_pattern_stats -> SQLi total_alerts=2 over last 24h
+
+Your response (NOTE: thought SYNTHESISES the facts; no "let me check"):
+<thought>Enrichment shows untrusted-external source IP (192.168.56.1) with 2 prior alerts this session; signature targets the users table via UNION SELECT. No additional tools needed — the verdict is determined.</thought>
+<final_answer>
+{"classification": "true_positive", "severity": "High", "summary": "UNION-based SQLi targeting user credentials from confirmed adversarial source", "recommendation": "block_source_ip", "reasoning": "Source 192.168.56.1 is in the untrusted host-only attacker network and has 2 prior alerts this session. The payload contains 'UNION SELECT user, password FROM users' — explicit credential extraction attempt."}
 </final_answer>
 """
 
@@ -750,9 +768,12 @@ class ReActAgent:
         system_steps = [s for s in accumulated if s.source == "system"]
         if system_steps:
             parts.append(
-                "\nThe following observations were automatically gathered "
-                "by the agent runtime before classification. Use them as "
-                "context for your decision."
+                "\nThe enrichment block below contains the FULL CONTEXT "
+                "you have access to. The agent runtime has ALREADY queried "
+                "the standard tools for this alert — you do NOT need to "
+                "call them again. Synthesise the facts directly into your "
+                "verdict; do NOT write '<thought>let me check ...' for "
+                "data that is right in front of you."
             )
             for step in system_steps:
                 args_str = (
