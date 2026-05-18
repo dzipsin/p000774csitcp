@@ -813,10 +813,15 @@ class ReportGenerator:
             )
             stage2["overall_attack_stage"] = fixed_tactic
 
-        # Hybrid suggestion policy (Option C):
-        #   - rule-based recommendations from playbook patterns (always specific)
-        #   - LLM suggestions filtered to drop known generic platitudes
-        #   - merged rule-based first, dedup'd, capped
+        # Hybrid suggestion policy (Option C, tightened):
+        #   1. rule-based recommendations from playbook patterns (always specific)
+        #   2. LLM suggestions filtered through three layers:
+        #        a. drop generic platitudes by banned-starter regex
+        #        b. drop suggestions that contradict enrichment data
+        #           (e.g. "Block 172.18.0.2" when the source is documented
+        #           internal infrastructure)
+        #        c. drop near-duplicates of rule-based (same verb + same IP)
+        #   3. merge rule-based first, dedup'd, capped at 6 total.
         rule_based_suggestions = _generate_rule_based_suggestions(
             incident=incident,
             classifications=classifications,
@@ -824,20 +829,36 @@ class ReportGenerator:
             tp_count=tp_count,
             fp_count=fp_count,
         )
-        llm_suggestions = _filter_generic_llm_suggestions(
-            stage2.get("ai_suggestions", []) or [],
+
+        raw_llm = stage2.get("ai_suggestions", []) or []
+        llm_after_generic = _filter_generic_llm_suggestions(raw_llm)
+
+        facts = _extract_enrichment_facts(classifications)
+        llm_after_enrichment = _filter_llm_against_enrichment(
+            llm_after_generic, facts,
         )
+
+        llm_after_dedup = _dedup_near_duplicates(
+            rule_based_suggestions, llm_after_enrichment,
+        )
+
         stage2["ai_suggestions"] = _merge_suggestions(
             rule_based=rule_based_suggestions,
-            llm=llm_suggestions,
+            llm=llm_after_dedup,
+            max_total=6,
         )
-        if rule_based_suggestions:
+
+        if rule_based_suggestions or raw_llm:
             log.info(
-                "Generated %d rule-based suggestion(s); kept %d/%d LLM suggestion(s)",
+                "Suggestions: %d rule-based, %d LLM raw -> %d after generic "
+                "filter -> %d after enrichment filter -> %d after dedup; "
+                "%d total emitted",
                 len(rule_based_suggestions),
-                len(llm_suggestions),
-                len(stage2.get("ai_suggestions", [])) - len(rule_based_suggestions)
-                + len(llm_suggestions),
+                len(raw_llm),
+                len(llm_after_generic),
+                len(llm_after_enrichment),
+                len(llm_after_dedup),
+                len(stage2.get("ai_suggestions", [])),
             )
 
         # --- Rule-based fields ---
@@ -1596,6 +1617,113 @@ def _filter_generic_llm_suggestions(suggestions: List[str]) -> List[str]:
             continue
         if _BANNED_SUGGESTION_STARTERS.match(s):
             log.debug("Dropping generic LLM suggestion: %s", s[:100])
+            continue
+        kept.append(s)
+    return kept
+
+
+# IP / Docker-bridge / verb patterns used by the enrichment-aware filter
+# and the near-duplicate dedup helper below.
+_DOCKER_BRIDGE_IP_RE = re.compile(r"\b172\.18\.\d{1,3}\.\d{1,3}\b")
+_IPV4_RE = re.compile(r"\b(\d{1,3}\.){3}\d{1,3}\b")
+_VERB_AND_IP_RE = re.compile(
+    r"^\s*(\w+)\b.*?\b((?:\d{1,3}\.){3}\d{1,3})\b",
+    re.IGNORECASE,
+)
+
+
+def _filter_llm_against_enrichment(
+    suggestions: List[str],
+    facts: Dict[str, Any],
+) -> List[str]:
+    """Drop LLM suggestions that contradict the agent's enrichment data.
+
+    Two failure modes observed in smoke testing on qwen2.5:3b:
+
+      A. "Block 172.18.0.2 ..." or "Investigate 172.18.0.2 ..." when
+         enrichment marked the source as internal_database. Following
+         this advice would break the lab.
+
+      B. "Tune Suricata to suppress <attack signature> ..." when the
+         source is UNTRUSTED EXTERNAL. Suppressing signatures from real
+         attackers is dangerously wrong (signatures should only be
+         suppressed for known-benign internal traffic patterns).
+
+    Both classes of bad suggestions are detectable from the enrichment
+    facts alone, so this filter runs deterministically before merge.
+    """
+    kept: List[str] = []
+    for s in suggestions:
+        if not isinstance(s, str):
+            continue
+
+        s_lower = s.lower()
+        s_lead = s.lstrip().lower()
+
+        # Failure mode A: don't block / investigate internal infra.
+        if facts.get("is_internal_only"):
+            starts_with_action = (
+                s_lead.startswith("block ")
+                or s_lead.startswith("investigate ")
+            )
+            mentions_internal_ip = bool(_DOCKER_BRIDGE_IP_RE.search(s))
+            if starts_with_action and mentions_internal_ip:
+                log.debug(
+                    "Dropping LLM suggestion (would target internal infra): %s",
+                    s[:100],
+                )
+                continue
+
+        # Failure mode B: don't suggest suppressing signatures coming
+        # from a confirmed adversary network.
+        if facts.get("is_untrusted_external"):
+            if "suppress" in s_lower and (
+                "suricata" in s_lower or "signature" in s_lower or "rule" in s_lower
+            ):
+                log.debug(
+                    "Dropping LLM suggestion (would suppress attack signature "
+                    "from untrusted external source): %s",
+                    s[:100],
+                )
+                continue
+
+        kept.append(s)
+    return kept
+
+
+def _dedup_near_duplicates(
+    rule_based: List[str],
+    llm: List[str],
+) -> List[str]:
+    """Drop LLM suggestions that share (first verb, first IP) with any
+    rule-based suggestion.
+
+    Example: rule-based emits "Block 192.168.56.1 at the perimeter firewall
+    — ...". LLM emits "Block 192.168.56.1 at the WAF — ...". Both share
+    (Block, 192.168.56.1) — the LLM one is dropped as a near-duplicate.
+
+    LLM suggestions that share a verb but a different IP, or a different
+    verb against the same IP, are kept (different recommendation).
+    """
+    rb_keys: set = set()
+    for s in rule_based:
+        if not isinstance(s, str):
+            continue
+        m = _VERB_AND_IP_RE.match(s)
+        if m:
+            rb_keys.add((m.group(1).lower(), m.group(2)))
+
+    kept: List[str] = []
+    for s in llm:
+        if not isinstance(s, str):
+            kept.append(s)
+            continue
+        m = _VERB_AND_IP_RE.match(s)
+        if m and (m.group(1).lower(), m.group(2)) in rb_keys:
+            log.debug(
+                "Dropping LLM near-duplicate (verb=%s, ip=%s): %s",
+                m.group(1), m.group(2), s[:100],
+            )
             continue
         kept.append(s)
     return kept

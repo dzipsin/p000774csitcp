@@ -45,6 +45,8 @@ from report_generator import (
     _override_mitre_tactic,
     _generate_rule_based_suggestions,
     _filter_generic_llm_suggestions,
+    _filter_llm_against_enrichment,
+    _dedup_near_duplicates,
     _merge_suggestions,
     _extract_enrichment_facts,
 )
@@ -1128,6 +1130,123 @@ def test_extract_enrichment_facts_empty_returns_safe_defaults():
 
 
 # ============================================================================
+# Tightened LLM filter: enrichment-aware + near-duplicate dedup
+# ============================================================================
+
+def test_enrichment_filter_drops_block_internal_ip():
+    print("\n=== Test 43: enrichment filter drops 'Block 172.18.0.x' on internal-only ===")
+    suggestions = [
+        "Block source IP 172.18.0.2 at the firewall — repeat offender.",
+        "Block 172.18.0.3 at the WAF.",
+        "Rotate credentials for any affected accounts.",  # not Block, should keep
+        "Block 192.168.56.1 at the firewall.",  # external IP, should keep
+    ]
+    facts = {"is_internal_only": True, "is_untrusted_external": False}
+    kept = _filter_llm_against_enrichment(suggestions, facts)
+    joined = "\n".join(kept)
+    assert "172.18.0.2" not in joined, f"internal IP 172.18.0.2 not dropped: {kept}"
+    assert "172.18.0.3" not in joined, f"internal IP 172.18.0.3 not dropped: {kept}"
+    assert "Rotate credentials" in joined, "Rotate suggestion incorrectly dropped"
+    assert "192.168.56.1" in joined, "external IP suggestion incorrectly dropped"
+    print(f"    PASS: dropped 2 internal-Block suggestions, kept 2 valid (len={len(kept)})")
+
+
+def test_enrichment_filter_drops_investigate_internal_ip():
+    print("\n=== Test 44: enrichment filter drops 'Investigate 172.18.0.x' on internal-only ===")
+    suggestions = [
+        "Investigate MySQL activity from 172.18.0.2 between 16:31 and 16:32 UTC.",
+        "Investigate session tokens issued to /vulnerabilities/sqli/ during the window.",
+    ]
+    facts = {"is_internal_only": True, "is_untrusted_external": False}
+    kept = _filter_llm_against_enrichment(suggestions, facts)
+    assert len(kept) == 1, f"Expected 1 kept, got {len(kept)}: {kept}"
+    assert "session tokens" in kept[0], "session-token investigation incorrectly dropped"
+    print("    PASS: dropped Investigate-internal-IP, kept Investigate-session-tokens")
+
+
+def test_enrichment_filter_drops_suppress_signature_when_external():
+    print("\n=== Test 45: enrichment filter drops 'Tune Suricata to suppress' when external ===")
+    suggestions = [
+        "Tune Suricata to suppress ET WEB_SERVER SELECT USER SQL Injection when src "
+        "is within 192.168.56.0/24.",
+        "Block 192.168.56.1 at the perimeter firewall.",
+    ]
+    facts = {"is_internal_only": False, "is_untrusted_external": True}
+    kept = _filter_llm_against_enrichment(suggestions, facts)
+    joined = "\n".join(kept)
+    assert "suppress" not in joined.lower(), f"suppress-signature not dropped: {kept}"
+    assert "Block 192.168.56.1" in joined, "Block suggestion incorrectly dropped"
+    print("    PASS: dropped dangerous suppress-attack-signature, kept Block")
+
+
+def test_enrichment_filter_no_change_when_facts_neutral():
+    print("\n=== Test 46: enrichment filter is no-op when facts are all defaults ===")
+    suggestions = [
+        "Block 10.0.0.1 at the firewall.",
+        "Tune Suricata to suppress some signature.",
+        "Investigate 172.18.0.2 activity.",
+    ]
+    facts = {"is_internal_only": False, "is_untrusted_external": False}
+    kept = _filter_llm_against_enrichment(suggestions, facts)
+    assert kept == suggestions, f"Expected no change, got: {kept}"
+    print("    PASS: neutral facts -> no suggestions dropped")
+
+
+def test_dedup_drops_same_verb_same_ip():
+    print("\n=== Test 47: dedup drops LLM suggestions sharing verb+IP with rule-based ===")
+    rule_based = [
+        "Block 192.168.56.1 at the perimeter firewall — repeat offender.",
+    ]
+    llm = [
+        "Block 192.168.56.1 at the WAF — repeat offender with 3 prior alerts.",
+        "Rotate credentials for any account active.",
+    ]
+    kept = _dedup_near_duplicates(rule_based, llm)
+    assert len(kept) == 1, f"Expected 1 kept, got {len(kept)}: {kept}"
+    assert kept[0].startswith("Rotate"), "non-duplicate Rotate should be kept"
+    print("    PASS: Block-192.168.56.1 LLM dropped as near-duplicate")
+
+
+def test_dedup_keeps_different_verb_same_ip():
+    print("\n=== Test 48: dedup keeps LLM suggestion with different verb on same IP ===")
+    rule_based = ["Block 192.168.56.1 at the firewall."]
+    llm = ["Investigate session activity from 192.168.56.1 during the window."]
+    kept = _dedup_near_duplicates(rule_based, llm)
+    assert kept == llm, f"different verb on same IP should be kept: {kept}"
+    print("    PASS: Investigate (different verb) kept against Block rule-based")
+
+
+def test_dedup_keeps_same_verb_different_ip():
+    print("\n=== Test 49: dedup keeps LLM suggestion with same verb on different IP ===")
+    rule_based = ["Block 192.168.56.1 at the firewall."]
+    llm = ["Block 10.0.0.5 at the firewall."]
+    kept = _dedup_near_duplicates(rule_based, llm)
+    assert kept == llm, f"different IP should be kept: {kept}"
+    print("    PASS: Block on a different IP kept")
+
+
+def test_dedup_keeps_llm_without_ip():
+    print("\n=== Test 50: dedup keeps LLM suggestions that have no IP at all ===")
+    rule_based = ["Block 192.168.56.1 at the firewall."]
+    llm = ["Audit output encoding on /vulnerabilities/xss_r/."]
+    kept = _dedup_near_duplicates(rule_based, llm)
+    assert kept == llm, f"no-IP suggestion should be kept: {kept}"
+    print("    PASS: IP-less suggestion preserved")
+
+
+def test_dedup_handles_non_string_input():
+    print("\n=== Test 51: dedup tolerates non-string entries ===")
+    rule_based = ["Block 1.1.1.1.", None, 42]
+    llm = ["Block 1.1.1.1 at WAF.", None, "Rotate creds."]
+    kept = _dedup_near_duplicates(rule_based, llm)
+    assert "Rotate creds." in kept
+    assert not any(isinstance(x, str) and "Block 1.1.1.1 at WAF" in x for x in kept), (
+        f"near-dup not dropped: {kept}"
+    )
+    print("    PASS: dedup safe with non-string entries")
+
+
+# ============================================================================
 # Runner
 # ============================================================================
 
@@ -1177,6 +1296,16 @@ def main():
         test_merge_dedupes_exact_duplicates,
         test_merge_caps_total,
         test_extract_enrichment_facts_empty_returns_safe_defaults,
+        # Tightened LLM filters (after smoke-test feedback)
+        test_enrichment_filter_drops_block_internal_ip,
+        test_enrichment_filter_drops_investigate_internal_ip,
+        test_enrichment_filter_drops_suppress_signature_when_external,
+        test_enrichment_filter_no_change_when_facts_neutral,
+        test_dedup_drops_same_verb_same_ip,
+        test_dedup_keeps_different_verb_same_ip,
+        test_dedup_keeps_same_verb_different_ip,
+        test_dedup_keeps_llm_without_ip,
+        test_dedup_handles_non_string_input,
     ]
 
     failed = []
