@@ -134,13 +134,42 @@ Based on the incident data below, produce a JSON object with these fields:
   "overview": "3-5 sentence narrative summarising the incident",
   "attack_vectors": ["list of vectors used, e.g. 'URL parameter', 'form field', 'HTTP header'"],
   "overall_attack_stage": "one MITRE ATT&CK tactic name",
-  "ai_suggestions": ["3-5 actionable recommendations"],
+  "ai_suggestions": ["2-4 SPECIFIC, ACTIONABLE recommendations — see rules below"],
   "exposure_detected": true or false,
   "exposure_types": ["what categories of data may be exposed, e.g. 'user credentials', 'database schema'"],
   "affected_systems": ["systems or components potentially affected"],
   "exposure_summary": "2-3 sentence summary of what data may have been exposed",
   "impact_assessment": "2-3 sentences on potential business or operational impact"
 }}
+
+AI_SUGGESTIONS — strict rules:
+Each suggestion MUST contain (a) a specific action verb, (b) a concrete
+target referenced from the incident data (IP, signature, endpoint,
+account, timestamp), and (c) a reason citing enrichment context (prior
+alert count, environment role, observed payload).
+
+GOOD examples:
+  - "Block 192.168.56.1 at the WAF — repeat offender with 14 prior SQLi
+     alerts in last 24h."
+  - "Investigate session tokens issued to /vulnerabilities/xss_r/
+     between 17:38 and 17:39 UTC — reflected XSS payload may have stolen
+     them."
+  - "Tune Suricata to suppress ET SCAN inbound to MySQL when both src
+     and dst are within 172.18.0.0/16 — documented internal traffic."
+
+BAD examples (DO NOT produce these — they will be dropped):
+  - "Implement additional security controls for the source IP." (no
+     verb specifying the action, no target, no reason)
+  - "Review and update application code." (vague verb, no specifics)
+  - "Enhance monitoring of vulnerable endpoints." (just restates the
+     problem already alerted on)
+  - "Consider implementing input validation." (hedge word, no target)
+
+BANNED starters (your suggestion will be discarded if it begins with
+these): "implement additional", "review and update", "enhance
+monitoring", "consider implementing", "consider using", "educate
+developers", "regularly update", "implement input validation",
+"implement a web application firewall".
 
 For "overall_attack_stage", choose one of: Reconnaissance, Resource Development,
 Initial Access, Execution, Persistence, Privilege Escalation, Defense Evasion,
@@ -784,6 +813,33 @@ class ReportGenerator:
             )
             stage2["overall_attack_stage"] = fixed_tactic
 
+        # Hybrid suggestion policy (Option C):
+        #   - rule-based recommendations from playbook patterns (always specific)
+        #   - LLM suggestions filtered to drop known generic platitudes
+        #   - merged rule-based first, dedup'd, capped
+        rule_based_suggestions = _generate_rule_based_suggestions(
+            incident=incident,
+            classifications=classifications,
+            detected_attacks=detected_attacks,
+            tp_count=tp_count,
+            fp_count=fp_count,
+        )
+        llm_suggestions = _filter_generic_llm_suggestions(
+            stage2.get("ai_suggestions", []) or [],
+        )
+        stage2["ai_suggestions"] = _merge_suggestions(
+            rule_based=rule_based_suggestions,
+            llm=llm_suggestions,
+        )
+        if rule_based_suggestions:
+            log.info(
+                "Generated %d rule-based suggestion(s); kept %d/%d LLM suggestion(s)",
+                len(rule_based_suggestions),
+                len(llm_suggestions),
+                len(stage2.get("ai_suggestions", [])) - len(rule_based_suggestions)
+                + len(llm_suggestions),
+            )
+
         # --- Rule-based fields ---
         data_sensitivity = _data_sensitivity_from_alerts(incident.alerts)
         iocs = _build_iocs(incident.alerts)
@@ -1309,6 +1365,263 @@ class ReportGenerator:
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# AI suggestion quality control (hybrid rule-based + LLM filter)
+# ---------------------------------------------------------------------------
+#
+# qwen2.5:3b reliably produces generic platitudes for `ai_suggestions`
+# regardless of how specific the alert data is. To compensate:
+#   1. Generate deterministic, playbook-style suggestions from the
+#      enrichment data + signatures (covers the predictable cases).
+#   2. Filter LLM-emitted suggestions to drop known generic starters.
+#   3. Merge: rule-based first, surviving LLM after, dedup'd.
+# This matches the MITRE-tactic override pattern below — rule for what we
+# KNOW, LLM judgment for the rest.
+
+_BANNED_SUGGESTION_STARTERS = re.compile(
+    r"^\s*(implement additional|review and update|enhance monitoring|"
+    r"consider implementing|consider using|educate developers|"
+    r"regularly update|implement input validation|"
+    r"implement a web application firewall)",
+    re.IGNORECASE,
+)
+
+
+def _extract_enrichment_facts(
+    classifications: List["AlertClassification"],
+) -> Dict[str, Any]:
+    """Walk Stage 1 reasoning traces to pull the enrichment data into a flat
+    dict the rule-based generator can consume cheaply.
+
+    All facts come from system-source steps (auto-enrichment), which are
+    identical across alerts in the same incident burst (thanks to the TTL
+    cache) — so we only need to read the first classification that has a
+    populated trace.
+    """
+    facts: Dict[str, Any] = {
+        "is_repeat_offender": False,
+        "prior_alert_count": 0,
+        "env_match_found": False,
+        "env_hint": "",
+        "env_role": "",
+        "is_internal_only": False,
+        "is_untrusted_external": False,
+    }
+
+    for cls in classifications:
+        trace = getattr(cls, "reasoning_trace", None)
+        if not trace:
+            continue
+
+        for step in trace:
+            if getattr(step, "source", "model") != "system":
+                continue
+            obs_raw = step.observation
+            if not obs_raw:
+                continue
+            try:
+                obs = json.loads(obs_raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(obs, dict):
+                continue
+
+            if step.action == "get_alert_history":
+                facts["is_repeat_offender"] = bool(
+                    obs.get("is_repeat_offender_this_session", False),
+                )
+                try:
+                    facts["prior_alert_count"] = int(obs.get("total_prior_alerts", 0) or 0)
+                except (TypeError, ValueError):
+                    facts["prior_alert_count"] = 0
+
+            elif step.action == "lookup_environment_context":
+                if obs.get("match_found"):
+                    facts["env_match_found"] = True
+                    facts["env_hint"] = str(obs.get("classification_hint", "") or "")
+                    facts["env_role"] = str(obs.get("role", "") or "")
+                    if facts["env_hint"] == "untrusted_source_likely_attacker":
+                        facts["is_untrusted_external"] = True
+                    if facts["env_hint"] == "likely_false_positive_if_internal_only":
+                        facts["is_internal_only"] = True
+
+        # Facts are identical across alerts in the same incident — first one wins.
+        if any(facts[k] for k in ("env_match_found", "is_repeat_offender")):
+            break
+
+    return facts
+
+
+def _generate_rule_based_suggestions(
+    incident: "Incident",
+    classifications: List["AlertClassification"],
+    detected_attacks: List[str],
+    tp_count: int,
+    fp_count: int,
+) -> List[str]:
+    """Deterministic SOC-playbook style suggestions.
+
+    Reads enrichment facts via _extract_enrichment_facts and emits specific,
+    actionable recommendations matching common incident patterns:
+
+      - Repeat offender + untrusted external -> block + pentest-tracker hint
+      - SQLi targeting credentials -> rotate credentials
+      - XSS confirmed -> audit endpoint output encoding
+      - Command injection -> investigate target host
+      - Any TP -> open Tier-2 ticket
+      - All FP from internal-only IP -> tune Suricata to suppress
+
+    Order matters — most operationally urgent first.
+    """
+    suggestions: List[str] = []
+    facts = _extract_enrichment_facts(classifications)
+    src_ip = incident.source_ip or "<unknown>"
+    incident_short = incident.incident_id[:8] if incident.incident_id else "?"
+
+    has_tp = tp_count > 0
+    detected_set = set(detected_attacks or [])
+
+    # Did any alert signature target credentials specifically?
+    has_sqli_creds = False
+    if "SQLi" in detected_set:
+        for a in incident.alerts:
+            sig_upper = (a.signature or "").upper()
+            if "SQL" in sig_upper and (
+                "USER" in sig_upper or "PASS" in sig_upper or "CREDENTIAL" in sig_upper
+            ):
+                has_sqli_creds = True
+                break
+
+    # XSS endpoints actually targeted (drop empty + dedupe + sort)
+    xss_endpoints: List[str] = []
+    if "XSS" in detected_set:
+        seen_eps: set = set()
+        for a in incident.alerts:
+            if extract_attack_type(a.signature) != "XSS":
+                continue
+            http = (a.raw_event or {}).get("http", {})
+            if not isinstance(http, dict):
+                continue
+            url = str(http.get("url", "") or "")
+            path = url.split("?")[0] if url else ""
+            if path and path not in seen_eps:
+                seen_eps.add(path)
+                xss_endpoints.append(path)
+
+    # --- 1. Block source IP (highest urgency for confirmed external attacks) ---
+    if has_tp and facts["is_untrusted_external"]:
+        if facts["is_repeat_offender"] and facts["prior_alert_count"] > 0:
+            suggestions.append(
+                f"Block {src_ip} at the perimeter firewall — repeat offender "
+                f"with {facts['prior_alert_count']} prior alert(s) this session "
+                f"from UNTRUSTED EXTERNAL network."
+            )
+        else:
+            suggestions.append(
+                f"Block {src_ip} at the perimeter firewall — confirmed "
+                f"{', '.join(sorted(detected_set)) or 'attack'} from "
+                f"UNTRUSTED EXTERNAL network."
+            )
+
+    # --- 2. Credential rotation for SQLi targeting USER/PASS ---
+    if has_tp and has_sqli_creds:
+        suggestions.append(
+            f"Rotate credentials for any account active between "
+            f"{incident.first_seen_display} and {incident.last_seen_display} "
+            f"— SQL injection observed targeting the users table (credential "
+            f"exfiltration intent)."
+        )
+
+    # --- 3. XSS endpoint audit ---
+    if has_tp and xss_endpoints:
+        ep_list = ", ".join(xss_endpoints[:3])
+        suggestions.append(
+            f"Audit output encoding on {ep_list} — reflected XSS payload "
+            f"observed; ensure user-controlled parameters are HTML-escaped "
+            f"on render and add Content-Security-Policy headers."
+        )
+
+    # --- 4. Command injection -> host investigation ---
+    if "CommandInjection" in detected_set and has_tp:
+        suggestions.append(
+            "Investigate the targeted host for evidence of code execution "
+            "— payload contains shell metacharacters; check new processes, "
+            "modified files, outbound connections in the alert time window."
+        )
+
+    # --- 5. Open Tier-2 ticket for any confirmed attack ---
+    if has_tp:
+        suggestions.append(
+            f"Open a Tier-2 ticket for incident {incident_short} — confirmed "
+            f"{', '.join(sorted(detected_set)) or 'attack'} from {src_ip}; "
+            f"include the full reasoning trace from this report."
+        )
+
+    # --- 6. Pentest documentation hint (only when external + TP) ---
+    if has_tp and facts["is_untrusted_external"]:
+        suggestions.append(
+            f"If this traffic is from an authorized penetration test, "
+            f"document incident {incident_short} in the pentest tracker so "
+            f"it can be filtered from operational SLA metrics."
+        )
+
+    # --- 7. Suricata tuning for internal-only FP cluster ---
+    all_fp_internal = (
+        tp_count == 0 and fp_count > 0 and facts["is_internal_only"]
+    )
+    if all_fp_internal:
+        sig_counts = Counter(a.signature for a in incident.alerts if a.signature)
+        if sig_counts:
+            dominant_sig, _ = sig_counts.most_common(1)[0]
+            suggestions.append(
+                f"Tune Suricata to suppress \"{dominant_sig}\" when both src "
+                f"and dst are within 172.18.0.0/16 — documented internal "
+                f"traffic; all {fp_count} alert(s) classified false_positive."
+            )
+
+    return suggestions
+
+
+def _filter_generic_llm_suggestions(suggestions: List[str]) -> List[str]:
+    """Drop LLM-emitted suggestions that begin with known generic starters.
+
+    Not too aggressive — only blocks unambiguously vague verbs (the ones the
+    model defaults to when uncertain). Specific suggestions that happen to
+    contain "implement" mid-sentence are kept.
+    """
+    kept: List[str] = []
+    for s in suggestions:
+        if not isinstance(s, str):
+            continue
+        if _BANNED_SUGGESTION_STARTERS.match(s):
+            log.debug("Dropping generic LLM suggestion: %s", s[:100])
+            continue
+        kept.append(s)
+    return kept
+
+
+def _merge_suggestions(
+    rule_based: List[str],
+    llm: List[str],
+    max_total: int = 8,
+) -> List[str]:
+    """Merge rule-based + LLM suggestions, rule-based first, dedup'd by
+    exact string, capped at max_total entries."""
+    out: List[str] = []
+    seen: set = set()
+    for s in list(rule_based) + list(llm):
+        if not isinstance(s, str):
+            continue
+        s_norm = s.strip()
+        if not s_norm or s_norm in seen:
+            continue
+        seen.add(s_norm)
+        out.append(s_norm)
+        if len(out) >= max_total:
+            break
+    return out
+
 
 # Rule-based MITRE ATT&CK tactic override. qwen2.5:3b often labels SQLi /
 # XSS incidents as "Reconnaissance" or "Execution" despite the explicit

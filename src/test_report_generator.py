@@ -40,7 +40,15 @@ from log_monitor import AlertRecord
 from models import Incident, extract_attack_type
 from model_provider import ModelProvider, ProviderType
 from storage import ReportStorage
-from report_generator import ReportGenerator, _override_mitre_tactic
+from report_generator import (
+    ReportGenerator,
+    _override_mitre_tactic,
+    _generate_rule_based_suggestions,
+    _filter_generic_llm_suggestions,
+    _merge_suggestions,
+    _extract_enrichment_facts,
+)
+from models import ReasoningStep, AlertClassification
 
 logging.basicConfig(
     level=logging.WARNING,  # keep test output clean; bump to INFO if debugging
@@ -823,6 +831,303 @@ def test_mitre_override_integrated_in_generate():
 
 
 # ============================================================================
+# Hybrid suggestion policy (Option C): rule-based + LLM filter + merge
+# ============================================================================
+
+def _make_cls_with_trace(
+    alert,
+    *,
+    is_repeat_offender: bool = False,
+    prior_alert_count: int = 0,
+    env_hint: str = "",
+    env_role: str = "",
+    env_match: bool = True,
+) -> AlertClassification:
+    """Build an AlertClassification whose reasoning_trace contains the
+    system enrichment steps the rule-based helpers need to read."""
+    trace = []
+    if is_repeat_offender or prior_alert_count:
+        trace.append(ReasoningStep(
+            iteration=0,
+            thought="",
+            action="get_alert_history",
+            action_input={"src_ip": alert.src_ip},
+            observation=json.dumps({
+                "is_repeat_offender_this_session": is_repeat_offender,
+                "total_prior_alerts": prior_alert_count,
+                "attack_types_seen": [],
+            }),
+            duration_ms=1,
+            source="system",
+        ))
+    if env_match and (env_hint or env_role):
+        trace.append(ReasoningStep(
+            iteration=0,
+            thought="",
+            action="lookup_environment_context",
+            action_input={"query": alert.src_ip},
+            observation=json.dumps({
+                "match_found": True,
+                "classification_hint": env_hint,
+                "role": env_role,
+            }),
+            duration_ms=1,
+            source="system",
+        ))
+    return AlertClassification(
+        alert_id=str(alert.flow_id) if alert.flow_id else "abc",
+        timestamp=alert.timestamp_raw,
+        classification="true_positive",
+        severity="High",
+        summary="x",
+        recommendation="block_source_ip",
+        reasoning="y",
+        signature=alert.signature,
+        signature_id=alert.signature_id,
+        category=alert.category,
+        src_ip=alert.src_ip,
+        dst_ip=alert.dst_ip,
+        src_port=alert.src_port,
+        dst_port=alert.dst_port,
+        attack_type=extract_attack_type(alert.signature),
+        confidence_score=0.9,
+        status="complete",
+        reasoning_trace=trace,
+        agent_mode="react",
+    )
+
+
+def test_rule_based_suggestions_block_repeat_untrusted():
+    print("\n=== Test 29: rule-based suggestion: block repeat offender (untrusted) ===")
+    alert = _make_alert(
+        src_ip="192.168.56.1",
+        signature="ET WEB_SERVER SELECT USER SQL Injection Attempt in URI",
+    )
+    cls = _make_cls_with_trace(
+        alert,
+        is_repeat_offender=True,
+        prior_alert_count=14,
+        env_hint="untrusted_source_likely_attacker",
+        env_role="host_only_network",
+    )
+    incident = _make_incident([alert])
+    sugg = _generate_rule_based_suggestions(
+        incident=incident, classifications=[cls],
+        detected_attacks=["SQLi"], tp_count=1, fp_count=0,
+    )
+    joined = " | ".join(sugg)
+    assert "Block 192.168.56.1" in joined, f"missing block suggestion: {joined}"
+    assert "14" in joined, f"missing prior count: {joined}"
+    assert "UNTRUSTED EXTERNAL" in joined, f"missing env tag: {joined}"
+    print("    PASS: block suggestion includes IP + prior count + env tag")
+
+
+def test_rule_based_suggestions_credential_rotation_for_sqli_user_signature():
+    print("\n=== Test 30: rule-based: credential rotation for SQLi targeting USER ===")
+    alert = _make_alert(
+        src_ip="192.168.56.1",
+        signature="ET WEB_SERVER SELECT USER SQL Injection Attempt in URI",
+    )
+    cls = _make_cls_with_trace(
+        alert,
+        env_hint="untrusted_source_likely_attacker",
+        env_role="host_only_network",
+    )
+    incident = _make_incident([alert])
+    sugg = _generate_rule_based_suggestions(
+        incident=incident, classifications=[cls],
+        detected_attacks=["SQLi"], tp_count=1, fp_count=0,
+    )
+    assert any("Rotate credentials" in s for s in sugg), (
+        f"missing credential rotation: {sugg}"
+    )
+    print("    PASS: SQLi targeting USER triggers credential rotation suggestion")
+
+
+def test_rule_based_suggestions_xss_endpoint_audit():
+    print("\n=== Test 31: rule-based: XSS endpoint audit suggestion ===")
+    alert = _make_alert(
+        src_ip="192.168.56.1",
+        signature="ET WEB_SERVER Script tag in URI Possible Cross Site Scripting",
+    )
+    # Add a raw_event so the rule can extract the endpoint
+    alert = replace(
+        alert,
+        raw_event={"http": {"url": "/vulnerabilities/xss_r/?name=<script>x</script>"}},
+    )
+    cls = _make_cls_with_trace(
+        alert,
+        env_hint="untrusted_source_likely_attacker",
+        env_role="host_only_network",
+    )
+    incident = _make_incident([alert])
+    sugg = _generate_rule_based_suggestions(
+        incident=incident, classifications=[cls],
+        detected_attacks=["XSS"], tp_count=1, fp_count=0,
+    )
+    assert any("/vulnerabilities/xss_r/" in s and "Audit" in s for s in sugg), (
+        f"missing XSS endpoint audit: {sugg}"
+    )
+    print("    PASS: XSS audit suggestion includes endpoint path")
+
+
+def test_rule_based_suggestions_internal_docker_fp_cluster():
+    print("\n=== Test 32: rule-based: tune Suricata for internal FP cluster ===")
+    alert = _make_alert(
+        src_ip="172.18.0.2",
+        signature="ET SCAN Suspicious inbound to mySQL port 3306",
+    )
+    cls = _make_cls_with_trace(
+        alert,
+        env_hint="likely_false_positive_if_internal_only",
+        env_role="internal_database",
+    )
+    # Force the classification to be FP rather than the default TP fixture
+    cls.classification = "likely_false_positive"
+    cls.severity = "Low"
+    cls.recommendation = "continue_monitoring"
+    incident = _make_incident([alert, alert, alert])  # 3 alerts, all FP
+    sugg = _generate_rule_based_suggestions(
+        incident=incident, classifications=[cls, cls, cls],
+        detected_attacks=["Reconnaissance"], tp_count=0, fp_count=3,
+    )
+    joined = " | ".join(sugg)
+    assert "Tune Suricata" in joined, f"missing Suricata tuning: {joined}"
+    assert "172.18.0.0/16" in joined, f"missing Docker subnet ref: {joined}"
+    assert "3 alert" in joined, f"missing FP count: {joined}"
+    print("    PASS: Suricata tuning suggestion for internal FP cluster")
+
+
+def test_rule_based_suggestions_tier2_ticket_for_any_tp():
+    print("\n=== Test 33: rule-based: Tier-2 ticket suggestion when TP > 0 ===")
+    alert = _make_alert(src_ip="10.0.0.1", signature="SQL Injection")
+    cls = _make_cls_with_trace(alert)
+    incident = _make_incident([alert])
+    sugg = _generate_rule_based_suggestions(
+        incident=incident, classifications=[cls],
+        detected_attacks=["SQLi"], tp_count=1, fp_count=0,
+    )
+    assert any("Tier-2" in s and "ticket" in s for s in sugg), (
+        f"missing Tier-2 ticket suggestion: {sugg}"
+    )
+    print("    PASS: any TP triggers Tier-2 ticket suggestion")
+
+
+def test_rule_based_suggestions_pentest_hint_for_external_tp():
+    print("\n=== Test 34: rule-based: pentest documentation hint for external TP ===")
+    alert = _make_alert(src_ip="192.168.56.1", signature="SQL Injection")
+    cls = _make_cls_with_trace(
+        alert, env_hint="untrusted_source_likely_attacker",
+        env_role="host_only_network",
+    )
+    incident = _make_incident([alert])
+    sugg = _generate_rule_based_suggestions(
+        incident=incident, classifications=[cls],
+        detected_attacks=["SQLi"], tp_count=1, fp_count=0,
+    )
+    assert any("pentest tracker" in s for s in sugg), (
+        f"missing pentest tracker hint: {sugg}"
+    )
+    print("    PASS: pentest hint emitted for external untrusted TP")
+
+
+def test_rule_based_suggestions_no_tier2_when_only_fps():
+    print("\n=== Test 35: rule-based: no Tier-2 ticket when all FPs ===")
+    alert = _make_alert(src_ip="172.18.0.2", signature="ET SCAN port 3306")
+    cls = _make_cls_with_trace(
+        alert, env_hint="likely_false_positive_if_internal_only",
+        env_role="internal_database",
+    )
+    cls.classification = "likely_false_positive"
+    incident = _make_incident([alert])
+    sugg = _generate_rule_based_suggestions(
+        incident=incident, classifications=[cls],
+        detected_attacks=["Reconnaissance"], tp_count=0, fp_count=1,
+    )
+    assert not any("Tier-2 ticket" in s for s in sugg), (
+        f"unexpected Tier-2 suggestion in FP-only incident: {sugg}"
+    )
+    print("    PASS: FP-only incident does not request Tier-2 escalation")
+
+
+def test_filter_drops_banned_starters():
+    print("\n=== Test 36: filter drops generic platitude starters ===")
+    bad = [
+        "Implement additional security controls.",
+        "Review and update application code.",
+        "Enhance monitoring of vulnerable endpoints.",
+        "Consider implementing input validation.",
+        "Educate developers about secure coding practices.",
+        "Regularly update the web application framework.",
+    ]
+    filtered = _filter_generic_llm_suggestions(bad)
+    assert filtered == [], f"Expected all dropped, got: {filtered}"
+    print("    PASS: 6 banned-starter suggestions all dropped")
+
+
+def test_filter_keeps_specific_suggestions():
+    print("\n=== Test 37: filter keeps specific, actionable suggestions ===")
+    good = [
+        "Block 192.168.56.1 at the WAF — 14 prior SQLi alerts.",
+        "Rotate credentials issued in the last hour.",
+        "Audit /vulnerabilities/xss_r/ output encoding.",
+    ]
+    filtered = _filter_generic_llm_suggestions(good)
+    assert filtered == good, f"Expected all kept, got: {filtered}"
+    print("    PASS: 3 specific suggestions kept")
+
+
+def test_filter_handles_non_string_input():
+    print("\n=== Test 38: filter ignores non-string entries ===")
+    mixed = ["valid", None, 42, "Implement additional X", "specific advice"]
+    filtered = _filter_generic_llm_suggestions(mixed)
+    assert filtered == ["valid", "specific advice"], (
+        f"expected non-strings dropped + banned dropped, got: {filtered}"
+    )
+    print("    PASS: non-string entries dropped, banned dropped")
+
+
+def test_merge_rule_based_first():
+    print("\n=== Test 39: merge puts rule-based before LLM ===")
+    rb = ["Rule A", "Rule B"]
+    llm = ["LLM 1", "LLM 2"]
+    merged = _merge_suggestions(rb, llm)
+    assert merged[:2] == ["Rule A", "Rule B"], f"rule-based not first: {merged}"
+    assert "LLM 1" in merged[2:], f"LLM not after rule-based: {merged}"
+    print("    PASS: rule-based listed before LLM in merged output")
+
+
+def test_merge_dedupes_exact_duplicates():
+    print("\n=== Test 40: merge dedupes exact duplicates ===")
+    rb = ["Same suggestion"]
+    llm = ["Same suggestion", "Different one"]
+    merged = _merge_suggestions(rb, llm)
+    assert merged == ["Same suggestion", "Different one"], (
+        f"dedup failed: {merged}"
+    )
+    print("    PASS: exact duplicate dropped")
+
+
+def test_merge_caps_total():
+    print("\n=== Test 41: merge caps total at max_total ===")
+    rb = ["a", "b", "c"]
+    llm = ["d", "e", "f", "g"]
+    merged = _merge_suggestions(rb, llm, max_total=4)
+    assert len(merged) == 4, f"cap not enforced: {merged}"
+    assert merged[:3] == ["a", "b", "c"], "rule-based preserved at top"
+    print("    PASS: merge respects max_total cap")
+
+
+def test_extract_enrichment_facts_empty_returns_safe_defaults():
+    print("\n=== Test 42: enrichment facts: empty classifications -> defaults ===")
+    facts = _extract_enrichment_facts([])
+    assert facts["is_repeat_offender"] is False
+    assert facts["prior_alert_count"] == 0
+    assert facts["env_match_found"] is False
+    print("    PASS: empty classifications -> safe default facts")
+
+
+# ============================================================================
 # Runner
 # ============================================================================
 
@@ -857,6 +1162,21 @@ def main():
         test_mitre_override_no_change_for_empty_attacks,
         test_mitre_override_mixed_attacks_picks_highest_priority,
         test_mitre_override_integrated_in_generate,
+        # Hybrid suggestions (Option C)
+        test_rule_based_suggestions_block_repeat_untrusted,
+        test_rule_based_suggestions_credential_rotation_for_sqli_user_signature,
+        test_rule_based_suggestions_xss_endpoint_audit,
+        test_rule_based_suggestions_internal_docker_fp_cluster,
+        test_rule_based_suggestions_tier2_ticket_for_any_tp,
+        test_rule_based_suggestions_pentest_hint_for_external_tp,
+        test_rule_based_suggestions_no_tier2_when_only_fps,
+        test_filter_drops_banned_starters,
+        test_filter_keeps_specific_suggestions,
+        test_filter_handles_non_string_input,
+        test_merge_rule_based_first,
+        test_merge_dedupes_exact_duplicates,
+        test_merge_caps_total,
+        test_extract_enrichment_facts_empty_returns_safe_defaults,
     ]
 
     failed = []
