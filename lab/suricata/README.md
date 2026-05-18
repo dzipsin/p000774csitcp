@@ -29,7 +29,7 @@ roll back if anything goes wrong.
 # (Inside the Kali VM)
 
 # 1. Copy file
-sudo cp /media/sf_soc-triage/lab/suricata/xss_alerts.rules \
+sudo cp /media/sf_soc-triage/p000774csitcp/lab/suricata/xss_alerts.rules \
         /etc/suricata/rules/xss_alerts.rules
 
 # 2. Wire into the loaded ruleset list
