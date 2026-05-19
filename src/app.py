@@ -285,6 +285,11 @@ try:
         on_report_ready=server.push_incident_report,
         agent_mode=effective_agent_mode,
         react_agent=react_agent,
+        # Pass env_entries so the rule-based suggestion generator and
+        # the LLM-suggestion filter keep working in single_shot mode —
+        # they derive facts deterministically from source_ip + env config
+        # when no reasoning trace exists.
+        env_entries=AGENT_ENV_ENTRIES,
     )
 
     # Wire IncidentManager -> ReportGenerator

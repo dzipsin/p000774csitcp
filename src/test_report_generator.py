@@ -1129,6 +1129,106 @@ def test_extract_enrichment_facts_empty_returns_safe_defaults():
     print("    PASS: empty classifications -> safe default facts")
 
 
+def test_enrichment_facts_fallback_from_incident_source_ip():
+    print("\n=== Test 42.5: facts fallback derives from source_ip when no trace ===")
+    # No reasoning_trace (single_shot mode), but env_entries given +
+    # source_ip matches an internal entry.
+    alert = _make_alert(src_ip="172.18.0.2")
+    incident = _make_incident([alert], source_ip="172.18.0.2")
+    # Build an empty-trace classification (single_shot path produces these)
+    cls = _make_cls_with_trace(alert)
+    cls.reasoning_trace = None   # explicitly NO trace (single_shot mode)
+
+    env_entries = [{
+        "pattern": "172.18.0.2",
+        "match_type": "exact_ip",
+        "role": "internal_database",
+        "classification_hint": "likely_false_positive_if_internal_only",
+        "description": "internal db",
+    }]
+    facts = _extract_enrichment_facts(
+        classifications=[cls],
+        incident=incident,
+        env_entries=env_entries,
+        repeat_offender_checker=lambda ip: ip == "172.18.0.2",
+    )
+    assert facts["env_match_found"] is True, "env fallback should have fired"
+    assert facts["is_internal_only"] is True, (
+        "172.18.0.2 hint should flag is_internal_only"
+    )
+    assert facts["env_role"] == "internal_database"
+    assert facts["is_repeat_offender"] is True, (
+        "repeat_offender_checker fallback should populate the flag"
+    )
+    print("    PASS: env + repeat_offender facts derived without reasoning trace")
+
+
+def test_rule_based_suggestions_work_in_single_shot_mode():
+    print("\n=== Test 42.6: rule-based suggestions fire even without enrichment trace ===")
+    # Mimic single_shot mode: no reasoning_trace, but env_entries supplied.
+    alert = _make_alert(src_ip="172.18.0.2",
+                        signature="ET SCAN Suspicious inbound to mySQL port 3306")
+    cls = _make_cls_with_trace(alert)
+    cls.reasoning_trace = None
+    cls.classification = "likely_false_positive"
+    cls.severity = "Low"
+    incident = _make_incident([alert, alert, alert], source_ip="172.18.0.2")  # 3 alerts, all FP
+
+    env_entries = [{
+        "pattern": "172.18.0.2",
+        "match_type": "exact_ip",
+        "role": "internal_database",
+        "classification_hint": "likely_false_positive_if_internal_only",
+        "description": "internal db",
+    }]
+    sugg = _generate_rule_based_suggestions(
+        incident=incident,
+        classifications=[cls, cls, cls],
+        detected_attacks=["Reconnaissance"],
+        tp_count=0, fp_count=3,
+        env_entries=env_entries,
+        repeat_offender_checker=lambda ip: False,
+    )
+    joined = " | ".join(sugg)
+    # The Tune Suricata rule depends on facts['is_internal_only']; it should
+    # now fire in single-shot mode because we derived that fact from source_ip.
+    assert "Tune Suricata" in joined, f"Suricata-tune suggestion missing: {sugg}"
+    assert "172.18.0.0/16" in joined
+    print("    PASS: Tune-Suricata rule fires in single_shot mode via fallback")
+
+
+def test_filter_drops_block_internal_ip_in_single_shot_mode():
+    print("\n=== Test 42.7: filter drops Block-internal-IP even without reasoning trace ===")
+    # Simulate the bug scenario: single_shot mode, LLM emits
+    # "Block 172.18.0.2", filter should drop it now that facts are
+    # derivable from source_ip.
+    alert = _make_alert(src_ip="172.18.0.2",
+                        signature="ET SCAN Suspicious inbound to mySQL port 3306")
+    cls = _make_cls_with_trace(alert)
+    cls.reasoning_trace = None
+    cls.classification = "likely_false_positive"
+    incident = _make_incident([alert], source_ip="172.18.0.2")
+    env_entries = [{
+        "pattern": "172.18.0.2",
+        "match_type": "exact_ip",
+        "role": "internal_database",
+        "classification_hint": "likely_false_positive_if_internal_only",
+        "description": "internal db",
+    }]
+    facts = _extract_enrichment_facts(
+        classifications=[cls],
+        incident=incident,
+        env_entries=env_entries,
+        repeat_offender_checker=lambda ip: False,
+    )
+    bad_suggestion = "Block 172.18.0.2 at the WAF -- repeat offender."
+    kept = _filter_llm_against_enrichment([bad_suggestion], facts)
+    assert kept == [], (
+        f"single-shot fallback should have dropped Block-internal-IP, got: {kept}"
+    )
+    print("    PASS: single_shot mode filter dropped Block-internal-IP")
+
+
 # ============================================================================
 # Tightened LLM filter: enrichment-aware + near-duplicate dedup
 # ============================================================================
@@ -1296,6 +1396,9 @@ def main():
         test_merge_dedupes_exact_duplicates,
         test_merge_caps_total,
         test_extract_enrichment_facts_empty_returns_safe_defaults,
+        test_enrichment_facts_fallback_from_incident_source_ip,
+        test_rule_based_suggestions_work_in_single_shot_mode,
+        test_filter_drops_block_internal_ip_in_single_shot_mode,
         # Tightened LLM filters (after smoke-test feedback)
         test_enrichment_filter_drops_block_internal_ip,
         test_enrichment_filter_drops_investigate_internal_ip,
