@@ -31,6 +31,7 @@ from model_provider import ModelConfig, ProviderType, create_provider
 from incident_manager import IncidentManager
 from report_generator import ReportGenerator
 from storage import ReportStorage
+from report_db import ReportDatabase
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -186,8 +187,33 @@ _reports_path = Path(REPORTS_DIR)
 if not _reports_path.is_absolute():
     _reports_path = Path(__file__).parent.parent / _reports_path
 
-storage = ReportStorage(str(_reports_path))
-log.info("Reports directory: %s", storage.directory)
+# Storage backend (Phase 10): SQLite preferred, JSON files retained for
+# back-compat. Resolved via [storage].backend in app.config.
+_storage_cfg = _cfg.get("storage", {}) or {}
+STORAGE_BACKEND = str(_storage_cfg.get("backend", "sqlite")).lower()
+STORAGE_DB_PATH = str(_storage_cfg.get("db_path", "data/reports.db"))
+STORAGE_RETENTION_DAYS = int(_storage_cfg.get("retention_days", 90) or 0)
+
+if STORAGE_BACKEND == "sqlite":
+    _db_path = Path(STORAGE_DB_PATH)
+    if not _db_path.is_absolute():
+        _db_path = Path(__file__).parent.parent / _db_path
+    storage = ReportDatabase(
+        db_path=str(_db_path),
+        retention_days=STORAGE_RETENTION_DAYS,
+    )
+    log.info(
+        "Storage backend: SQLite at %s (retention=%d days)",
+        _db_path, STORAGE_RETENTION_DAYS,
+    )
+else:
+    if STORAGE_BACKEND != "json":
+        log.warning(
+            "Unknown storage.backend '%s'; defaulting to json",
+            STORAGE_BACKEND,
+        )
+    storage = ReportStorage(str(_reports_path))
+    log.info("Storage backend: JSON files at %s", storage.directory)
 
 # Incident manager starts with no callback; we set it after creating the generator
 incident_manager = IncidentManager(

@@ -209,6 +209,8 @@ __marimo__/
 reports/
 # Phase 4 evaluation outputs
 eval_results/
+# Phase 10 SQLite database (data/reports.db, WAL + SHM sidecar files)
+data/
 
 # Claude Code session files (settings, hooks, agent definitions, transcripts)
 .claude/
