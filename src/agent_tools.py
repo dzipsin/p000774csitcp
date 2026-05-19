@@ -21,7 +21,7 @@ import ipaddress
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from log_monitor import AlertRecord  # for type clarity
 from models import extract_attack_type
@@ -332,6 +332,40 @@ def _env_entry_matches(entry: Dict[str, Any], query: str) -> bool:
 
     # Unknown match type was rejected at compile; shouldn't reach here.
     return False
+
+
+def lookup_environment_for_query(
+    env_entries: List[Dict[str, Any]],
+    query: str,
+) -> Optional[Dict[str, Any]]:
+    """Pure-function form of make_environment_lookup_tool.
+
+    Returns the matched entry dict (with role / description /
+    classification_hint / matched_pattern / match_type), or None if no
+    match. Lets ReportGenerator derive environment facts deterministically
+    from a source IP without needing the ReAct tool path to have run —
+    so the rule-based suggestion generator and the LLM-suggestion filter
+    keep working in single_shot mode and react+no-enrich mode.
+
+    Re-uses the same compile + match helpers as the agent tool so the
+    matching semantics stay identical across both code paths.
+    """
+    if not env_entries or not query:
+        return None
+    compiled = _compile_env_entries(env_entries)
+    q = str(query).strip()
+    if not q:
+        return None
+    for entry in compiled:
+        if _env_entry_matches(entry, q):
+            return {
+                "matched_pattern":    entry["pattern"],
+                "match_type":         entry["match_type"],
+                "role":               entry.get("role", ""),
+                "description":        entry.get("description", ""),
+                "classification_hint": entry.get("classification_hint", ""),
+            }
+    return None
 
 
 def make_environment_lookup_tool(

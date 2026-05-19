@@ -677,6 +677,7 @@ class ReportGenerator:
         on_report_ready: Optional[Callable[[IncidentReport], None]] = None,
         agent_mode: str = "single_shot",
         react_agent: Optional[object] = None,
+        env_entries: Optional[List[Dict[str, Any]]] = None,
     ):
         """
         Args:
@@ -694,6 +695,14 @@ class ReportGenerator:
                          dependency on react_agent (which in turn imports
                          from report_generator). The duck-type contract is
                          react_agent.classify(alert) -> AlertClassification.
+            env_entries: [[agent.environment.entries]] from app.config. Used
+                         by the rule-based suggestion generator and the
+                         LLM-suggestion filter to derive env facts from
+                         the incident's source_ip even when auto_enrichment
+                         is off (i.e. single_shot or react+no-enrich modes).
+                         Optional — when None, fallback is disabled and
+                         filters operate on whatever the reasoning trace
+                         contains.
         """
         if summary_mode not in ("llm", "template"):
             log.warning(
@@ -723,6 +732,9 @@ class ReportGenerator:
 
         self._agent_mode = agent_mode
         self._react_agent = react_agent
+        # Cached env_entries so the rule-based + filter code can derive
+        # facts without a reasoning trace (single_shot mode fallback).
+        self._env_entries = list(env_entries or [])
 
         self._stage1_system_prompt = _build_stage1_system_prompt(include_lab_context)
 
@@ -828,12 +840,21 @@ class ReportGenerator:
             detected_attacks=detected_attacks,
             tp_count=tp_count,
             fp_count=fp_count,
+            env_entries=self._env_entries,
+            repeat_offender_checker=self._is_repeat_offender,
         )
 
         raw_llm = stage2.get("ai_suggestions", []) or []
         llm_after_generic = _filter_generic_llm_suggestions(raw_llm)
 
-        facts = _extract_enrichment_facts(classifications)
+        # Compute facts with the SAME fallback so single_shot mode also
+        # benefits from the enrichment-aware filter.
+        facts = _extract_enrichment_facts(
+            classifications=classifications,
+            incident=incident,
+            env_entries=self._env_entries,
+            repeat_offender_checker=self._is_repeat_offender,
+        )
         llm_after_enrichment = _filter_llm_against_enrichment(
             llm_after_generic, facts,
         )
@@ -1411,14 +1432,31 @@ _BANNED_SUGGESTION_STARTERS = re.compile(
 
 def _extract_enrichment_facts(
     classifications: List["AlertClassification"],
+    incident: Optional["Incident"] = None,
+    env_entries: Optional[List[Dict[str, Any]]] = None,
+    repeat_offender_checker: Optional[Callable[[str], bool]] = None,
 ) -> Dict[str, Any]:
-    """Walk Stage 1 reasoning traces to pull the enrichment data into a flat
-    dict the rule-based generator can consume cheaply.
+    """Build the flat fact dict the rule-based generator + LLM filter consume.
 
-    All facts come from system-source steps (auto-enrichment), which are
-    identical across alerts in the same incident burst (thanks to the TTL
-    cache) — so we only need to read the first classification that has a
-    populated trace.
+    Two ways to populate the facts, applied in order:
+
+      1. Walk the Stage 1 reasoning traces. System-driven enrichment
+         steps carry both get_alert_history (prior counts, repeat
+         offender) and lookup_environment_context (env role, hint)
+         results. This is the path the React+Enrichment configuration
+         takes.
+
+      2. Fall back to deterministic derivation from the incident's
+         source_ip. In single-shot mode (or react+no-enrich), no
+         reasoning trace exists — but the same env config used by the
+         enrichment tool is available, and the IncidentManager's repeat
+         offender flag is callable. Filling these in here means the
+         filter + rule-based generator work IDENTICALLY across all
+         modes.
+
+    Optional `incident` + `env_entries` + `repeat_offender_checker`
+    enable the fallback. Without them the function reverts to old
+    trace-only behaviour.
     """
     facts: Dict[str, Any] = {
         "is_repeat_offender": False,
@@ -1430,6 +1468,7 @@ def _extract_enrichment_facts(
         "is_untrusted_external": False,
     }
 
+    # --- Path 1: reasoning trace from auto-enrichment ---
     for cls in classifications:
         trace = getattr(cls, "reasoning_trace", None)
         if not trace:
@@ -1467,9 +1506,37 @@ def _extract_enrichment_facts(
                     if facts["env_hint"] == "likely_false_positive_if_internal_only":
                         facts["is_internal_only"] = True
 
-        # Facts are identical across alerts in the same incident — first one wins.
+        # Facts are identical across alerts in the same incident — first
+        # populated trace wins.
         if any(facts[k] for k in ("env_match_found", "is_repeat_offender")):
             break
+
+    # --- Path 2: deterministic fallback from incident.source_ip ---
+    # Applied per-field — if Path 1 already set a field, leave it alone.
+    if incident is not None and incident.source_ip:
+        # Env lookup
+        if not facts["env_match_found"] and env_entries:
+            try:
+                from agent_tools import lookup_environment_for_query
+                match = lookup_environment_for_query(env_entries, incident.source_ip)
+            except ImportError:  # pragma: no cover — defensive
+                match = None
+            if match:
+                facts["env_match_found"] = True
+                facts["env_hint"] = str(match.get("classification_hint", "") or "")
+                facts["env_role"] = str(match.get("role", "") or "")
+                if facts["env_hint"] == "untrusted_source_likely_attacker":
+                    facts["is_untrusted_external"] = True
+                if facts["env_hint"] == "likely_false_positive_if_internal_only":
+                    facts["is_internal_only"] = True
+
+        # Repeat offender — IncidentManager carries the in-session state
+        if not facts["is_repeat_offender"] and repeat_offender_checker is not None:
+            try:
+                if repeat_offender_checker(incident.source_ip):
+                    facts["is_repeat_offender"] = True
+            except Exception:  # noqa: BLE001 — never let fallback raise
+                pass
 
     return facts
 
@@ -1480,6 +1547,8 @@ def _generate_rule_based_suggestions(
     detected_attacks: List[str],
     tp_count: int,
     fp_count: int,
+    env_entries: Optional[List[Dict[str, Any]]] = None,
+    repeat_offender_checker: Optional[Callable[[str], bool]] = None,
 ) -> List[str]:
     """Deterministic SOC-playbook style suggestions.
 
@@ -1494,9 +1563,18 @@ def _generate_rule_based_suggestions(
       - All FP from internal-only IP -> tune Suricata to suppress
 
     Order matters — most operationally urgent first.
+
+    Optional `env_entries` + `repeat_offender_checker` are forwarded to
+    _extract_enrichment_facts so the generator produces meaningful
+    suggestions even in single_shot mode (no reasoning trace).
     """
     suggestions: List[str] = []
-    facts = _extract_enrichment_facts(classifications)
+    facts = _extract_enrichment_facts(
+        classifications=classifications,
+        incident=incident,
+        env_entries=env_entries,
+        repeat_offender_checker=repeat_offender_checker,
+    )
     src_ip = incident.source_ip or "<unknown>"
     incident_short = incident.incident_id[:8] if incident.incident_id else "?"
 
