@@ -389,6 +389,53 @@ def test_cleanup_disabled_when_retention_zero():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_retention_sweeper_starts_and_stops():
+    print("\n=== Test 12.5: retention sweeper starts + cleans + stops cleanly ===")
+    d = _tmp_dir()
+    try:
+        db = ReportDatabase(db_path=str(d / "reports.db"), retention_days=1)
+        # Insert one expired row
+        now = datetime.now(timezone.utc)
+        db.save(_make_report(
+            incident_id="ancient_for_sweeper",
+            generated_at=(now - timedelta(days=30)).isoformat(),
+        ))
+        # Short interval so we see the loop tick during the test
+        db.start_retention_sweeper(interval_seconds=0.5)
+        # First-pass cleanup happens IMMEDIATELY at sweeper start
+        time.sleep(0.2)
+        # Already gone via initial cleanup
+        assert len(db.list_reports()) == 0, (
+            "expected the initial sweep to drop the expired row"
+        )
+
+        # Insert a fresh row — should survive
+        db.save(_make_report(incident_id="fresh_for_sweeper"))
+        time.sleep(1.2)   # let the sweeper tick once more
+        ids = [r["incident_summary"]["incident_id"] for r in db.list_reports()]
+        assert ids == ["fresh_for_sweeper"], (
+            f"sweeper deleted the fresh row, leaving: {ids}"
+        )
+
+        db.stop_retention_sweeper(timeout=2.0)
+        assert db._sweeper_thread is None
+        print("    PASS: sweeper started, dropped expired, preserved fresh, stopped")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_retention_sweeper_skips_when_retention_zero():
+    print("\n=== Test 12.6: retention sweeper does not start when retention=0 ===")
+    d = _tmp_dir()
+    try:
+        db = ReportDatabase(db_path=str(d / "reports.db"), retention_days=0)
+        db.start_retention_sweeper(interval_seconds=0.1)
+        assert db._sweeper_thread is None, "sweeper should NOT start with retention=0"
+        print("    PASS: retention=0 leaves sweeper disabled")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_drop_in_compat_interface():
     print("\n=== Test 12: drop-in compat with ReportStorage public interface ===")
     d = _tmp_dir()
@@ -425,6 +472,8 @@ def main():
         test_aggregate_stats,
         test_cleanup_expired,
         test_cleanup_disabled_when_retention_zero,
+        test_retention_sweeper_starts_and_stops,
+        test_retention_sweeper_skips_when_retention_zero,
         test_drop_in_compat_interface,
     ]
     failed = []

@@ -154,6 +154,9 @@ class ReportDatabase:
         # share across threads by default; each thread gets its own and
         # we close them on shutdown via the connection objects' own lifetime.
         self._tls = threading.local()
+        # Retention sweeper thread state (started via start_retention_sweeper).
+        self._sweeper_thread: Optional[threading.Thread] = None
+        self._sweeper_stop = threading.Event()
         # Bootstrap schema on the main thread before any worker can race.
         self._bootstrap_schema()
         log.info(
@@ -580,6 +583,60 @@ class ReportDatabase:
         except sqlite3.Error as e:
             log.error("aggregate_stats failed: %s", e)
             return {}
+
+    # ------------------------------------------------------------------
+    # Background retention sweeper
+    # ------------------------------------------------------------------
+
+    def start_retention_sweeper(self, interval_seconds: float) -> None:
+        """Start a background thread that calls cleanup_expired periodically.
+
+        Idempotent — calling twice is a no-op while the thread is alive.
+        Set interval_seconds <= 0 OR retention_days = 0 to skip starting.
+        """
+        if interval_seconds <= 0 or self._retention_days <= 0:
+            log.info(
+                "Retention sweeper disabled (interval=%.0fs, retention=%d days)",
+                interval_seconds, self._retention_days,
+            )
+            return
+        if self._sweeper_thread is not None and self._sweeper_thread.is_alive():
+            return
+
+        self._sweeper_stop.clear()
+
+        def _loop():
+            log.info(
+                "Retention sweeper started (interval=%.0fs, retention=%d days)",
+                interval_seconds, self._retention_days,
+            )
+            # First pass at startup — clear anything already past its window.
+            try:
+                self.cleanup_expired()
+            except Exception as e:  # noqa: BLE001 — sweeper must not crash
+                log.exception("Initial retention sweep raised: %s", e)
+            while not self._sweeper_stop.is_set():
+                # wait() with timeout = sleep that can be cancelled cleanly
+                if self._sweeper_stop.wait(timeout=interval_seconds):
+                    break
+                try:
+                    self.cleanup_expired()
+                except Exception as e:  # noqa: BLE001
+                    log.exception("Retention sweep raised: %s", e)
+            log.info("Retention sweeper stopped")
+
+        self._sweeper_thread = threading.Thread(
+            target=_loop, name="report-db-retention", daemon=True,
+        )
+        self._sweeper_thread.start()
+
+    def stop_retention_sweeper(self, timeout: float = 2.0) -> None:
+        """Signal the sweeper to exit and wait briefly for it to do so."""
+        self._sweeper_stop.set()
+        thread = self._sweeper_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
+        self._sweeper_thread = None
 
     def cleanup_expired(self, retention_days: Optional[int] = None) -> int:
         """Delete incidents older than retention_days. 0 = never expire.

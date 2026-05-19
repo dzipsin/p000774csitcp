@@ -193,6 +193,7 @@ _storage_cfg = _cfg.get("storage", {}) or {}
 STORAGE_BACKEND = str(_storage_cfg.get("backend", "sqlite")).lower()
 STORAGE_DB_PATH = str(_storage_cfg.get("db_path", "data/reports.db"))
 STORAGE_RETENTION_DAYS = int(_storage_cfg.get("retention_days", 90) or 0)
+STORAGE_CLEANUP_INTERVAL = float(_storage_cfg.get("cleanup_interval_seconds", 3600) or 0.0)
 
 if STORAGE_BACKEND == "sqlite":
     _db_path = Path(STORAGE_DB_PATH)
@@ -320,6 +321,12 @@ try:
     server.set_incident_force_regenerate(incident_manager.force_regenerate_all)
     server.set_incident_clear_all(storage.clear_all)
 
+    # Phase 10: attach the storage backend so the Server can serve the
+    # history-query endpoints (/api/incidents/by-ip, /by-attack, /stats).
+    # Works for both SQLite (full feature set) and JSON (those endpoints
+    # return 503 — Server.set_storage falls back gracefully via hasattr).
+    server.set_storage(storage)
+
     log.info("Model provider : %s", model_config.provider.value)
     log.info("Model          : %s", model_config.model)
     log.info("Agent mode     : %s", effective_agent_mode)
@@ -363,6 +370,13 @@ def _graceful_shutdown(signum, frame):
     except Exception:
         log.exception("Error stopping IncidentManager")
 
+    # Phase 10: stop the retention sweeper if it was started.
+    if hasattr(storage, "stop_retention_sweeper"):
+        try:
+            storage.stop_retention_sweeper()
+        except Exception:
+            log.exception("Error stopping retention sweeper")
+
     log.info("Shutdown complete")
     sys.exit(0)
 
@@ -386,6 +400,11 @@ if __name__ == "__main__":
     # IncidentManager first so its sweeper is live when alerts arrive.
     incident_manager.start()
     monitor.start()
+
+    # Phase 10: retention sweeper. Started only when the storage backend
+    # exposes start_retention_sweeper (SQLite does, JSON doesn't).
+    if hasattr(storage, "start_retention_sweeper"):
+        storage.start_retention_sweeper(STORAGE_CLEANUP_INTERVAL)
 
     # Blocks until server stops (Ctrl+C triggers _graceful_shutdown above)
     server.run()

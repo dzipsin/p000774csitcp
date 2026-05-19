@@ -19,6 +19,7 @@ Depends on:
 import dataclasses
 import logging
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from flask import Flask, jsonify, render_template, request
@@ -29,6 +30,23 @@ from ai_module import AIAnalyzer, AlertReport
 from models import IncidentReport
 
 log = logging.getLogger(__name__)
+
+
+def _parse_hours(raw: Optional[str]) -> Optional[float]:
+    """Convert `?hours=N` query string into a since_epoch.
+
+    Returns None if missing or invalid (caller treats None as "all time").
+    Negative or zero values also return None.
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if hours <= 0:
+        return None
+    return time.time() - (hours * 3600.0)
 
 
 class Server:
@@ -74,6 +92,11 @@ class Server:
         self._analyser: Optional[AIAnalyzer] = None
         self._incident_force_regenerate: Optional[Callable[[], int]] = None
         self._incident_clear_all: Optional[Callable[[], int]] = None
+        # Phase 10: query-capable storage backend (ReportDatabase). Endpoints
+        # that require SQLite-only methods (list_by_*, aggregate_stats) check
+        # `hasattr` before calling, so a JSON-backed deployment still works
+        # (those endpoints just return 503).
+        self._storage: Optional[Any] = None
 
         # Flask app + Socket.IO
         self._app = Flask(__name__)
@@ -98,6 +121,13 @@ class Server:
     def set_incident_clear_all(self, fn: Callable[[], int]) -> None:
         """Attach a callable that clears incident storage (on-disk reports)."""
         self._incident_clear_all = fn
+
+    def set_storage(self, storage: Any) -> None:
+        """Attach the storage backend. When it exposes the Phase 10 query
+        methods (list_by_source_ip / list_by_attack_type / list_by_severity
+        / aggregate_stats), the corresponding HTTP endpoints become live.
+        JSON-backed storage works but those endpoints return 503."""
+        self._storage = storage
 
     # ------------------------------------------------------------------
     # Inbound: alerts
@@ -321,6 +351,130 @@ class Server:
                 "cleared_memory": mem_count,
                 "cleared_disk": disk_count,
             })
+
+        # ------------------------------------------------------------------
+        # Routes: incident history queries (Phase 10 — SQLite-backed)
+        #
+        # These endpoints depend on the SQLite ReportDatabase. With the
+        # legacy JSON ReportStorage backend they return 503 — the routes
+        # are still registered so the frontend doesn't have to detect
+        # backend capability differently.
+        # ------------------------------------------------------------------
+
+        def _require_query_backend(method_name: str):
+            """Return None if the backend supports method_name, otherwise a
+            (response, status) tuple suitable for `return` in the handler."""
+            if self._storage is None:
+                return jsonify({
+                    "error": "Storage backend not attached.",
+                }), 503
+            if not hasattr(self._storage, method_name):
+                return jsonify({
+                    "error": (
+                        f"Backend does not support history queries "
+                        f"(method `{method_name}` unavailable). Set "
+                        f"[storage].backend = \"sqlite\" in app.config."
+                    ),
+                }), 503
+            return None
+
+        @app.route("/api/incidents/by-ip/<path:source_ip>")
+        def api_incidents_by_ip(source_ip: str):
+            """All incidents from a given source IP across all sessions.
+
+            Query params:
+                hours = N  → only incidents whose generated_at is within
+                             the last N hours.
+            """
+            err = _require_query_backend("list_by_source_ip")
+            if err is not None:
+                return err
+            since_epoch = _parse_hours(request.args.get("hours"))
+            try:
+                results = self._storage.list_by_source_ip(
+                    source_ip=source_ip, since_epoch=since_epoch,
+                )
+                return jsonify({
+                    "source_ip": source_ip,
+                    "since_epoch": since_epoch,
+                    "incidents": results,
+                    "total": len(results),
+                })
+            except Exception as e:
+                log.exception("by-ip query failed: %s", e)
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/incidents/by-attack/<path:attack_type>")
+        def api_incidents_by_attack(attack_type: str):
+            """All incidents whose detected_attacks list contains attack_type.
+
+            Query params:
+                hours = N
+            """
+            err = _require_query_backend("list_by_attack_type")
+            if err is not None:
+                return err
+            since_epoch = _parse_hours(request.args.get("hours"))
+            try:
+                results = self._storage.list_by_attack_type(
+                    attack_type=attack_type, since_epoch=since_epoch,
+                )
+                return jsonify({
+                    "attack_type": attack_type,
+                    "since_epoch": since_epoch,
+                    "incidents": results,
+                    "total": len(results),
+                })
+            except Exception as e:
+                log.exception("by-attack query failed: %s", e)
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/incidents/by-severity/<severity>")
+        def api_incidents_by_severity(severity: str):
+            """All incidents with the given overall severity."""
+            err = _require_query_backend("list_by_severity")
+            if err is not None:
+                return err
+            try:
+                results = self._storage.list_by_severity(severity=severity)
+                return jsonify({
+                    "severity": severity,
+                    "incidents": results,
+                    "total": len(results),
+                })
+            except Exception as e:
+                log.exception("by-severity query failed: %s", e)
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/incidents/stats")
+        def api_incidents_stats():
+            """Aggregate counts of incidents by status / severity / attack
+            type plus repeat-offender count. Query params:
+                hours = N  → bound the window."""
+            err = _require_query_backend("aggregate_stats")
+            if err is not None:
+                return err
+            since_epoch = _parse_hours(request.args.get("hours"))
+            try:
+                stats = self._storage.aggregate_stats(since_epoch=since_epoch)
+                return jsonify(stats)
+            except Exception as e:
+                log.exception("aggregate_stats failed: %s", e)
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/incidents/cleanup", methods=["POST"])
+        def api_incidents_cleanup():
+            """Manually trigger retention cleanup. Drops incidents older
+            than the configured retention. Returns the count dropped."""
+            err = _require_query_backend("cleanup_expired")
+            if err is not None:
+                return err
+            try:
+                count = self._storage.cleanup_expired()
+                return jsonify({"dropped": count})
+            except Exception as e:
+                log.exception("cleanup_expired failed: %s", e)
+                return jsonify({"error": str(e)}), 500
 
     # ------------------------------------------------------------------
     # Socket.IO events
