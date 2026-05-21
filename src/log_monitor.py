@@ -39,7 +39,7 @@ class AlertRecord:
 
     # --- Severity ---
     severity_level: int         # Suricata native: 1=critical … 4=informational
-    severity_label: str         # "critical" | "high" | "medium" | "low"
+    severity_label: str         # "critical" | "high" | "low"
 
     # --- Network tuple ---
     src_ip: str
@@ -80,7 +80,7 @@ class AlertRecord:
 
 
 
-_SEVERITY_MAP = {1: "critical", 2: "high", 3: "medium"}
+_SEVERITY_MAP = {1: "critical", 2: "high"}   # Suricata severity 3+ → "low"
 
 
 def _parse_line(line: str) -> Optional[AlertRecord]:

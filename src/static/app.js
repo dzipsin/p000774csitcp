@@ -22,7 +22,7 @@ const tabCountAlerts    = document.getElementById('tab-count-alerts');
 const tabCountIncidents = document.getElementById('tab-count-incidents');
 
 // Alert stats
-const alertStats   = { total: 0, critical: 0, high: 0, medium: 0, low: 0 };
+const alertStats   = { total: 0, critical: 0, high: 0, low: 0 };
 const alertStatEls = Object.fromEntries(
   Object.keys(alertStats).map(k => [k, document.getElementById('stat-' + k)])
 );
