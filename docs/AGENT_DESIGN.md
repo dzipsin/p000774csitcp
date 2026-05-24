@@ -1,9 +1,10 @@
 # Agentic ReAct Triage Loop — Design Specification
 
-**Status:** Draft for review
-**Branch:** `feature/agentic-react-loop`
-**Author context:** Capstone project p000774csitcp (RMIT)
-**Scope:** Replace Stage 1 single-shot LLM classification with a tool-using ReAct loop, satisfying the capstone spec's "agentic AI module" requirement.
+**Status:** Implemented. Phases 1-5 plus 5.5 (hybrid auto-enrichment), 3.5 (template serializer), 10 (SQLite persistence) all landed. Active branch: `feature/sqlite-persistence`.
+**Author context:** Capstone project p000774csitcp (RMIT).
+**Scope:** Design rationale for the agentic Stage 1 (ReAct loop + 3 tools). Stage 2 still makes one LLM call per incident but gained deterministic post-processing (MITRE override + 3-layer suggestion filter).
+
+> **This doc is the design rationale, not a status tracker.** For current implementation status, branches, what's done, what's left, read `docs/HANDOFF.md`. For a hand-drawn workflow diagram with explanations, read `docs/ARCHITECTURE.md`. Several decisions made during implementation supplement or override what is described below — they are summarised in section 16 ("Design changes during implementation") at the bottom of this doc.
 
 ---
 
@@ -538,57 +539,90 @@ The agent is provider-agnostic. Ollama (qwen2.5:3b, llama3.2:3b) and Anthropic (
 
 ## 8. Configuration schema
 
-Additions to `app.config`:
+Additions to `app.config` (current state, as committed):
 
 ```toml
 [agent]
-# Agent mode: "react" enables tool-using ReAct loop.
-# "single_shot" uses the original Stage 1 path (preserved for evaluation ablation).
-mode = "react"
+# "react" enables the tool-using ReAct loop. "single_shot" uses the
+# original Stage 1 path (preserved for evaluation ablation).
+mode                    = "react"
 
-# Maximum ReAct iterations before forcing a final answer.
-max_iterations = 3
+# Max ReAct iterations before forcing a final answer.
+max_iterations          = 3
 
-# Per-tool execution timeout in seconds.
-tool_timeout_seconds = 5.0
+# Per-tool execution timeout (seconds). Tools should finish in <100ms;
+# this catches deadlocks.
+tool_timeout_seconds    = 5.0
 
-# Total wall-clock budget for one alert classification, including all
-# LLM calls and tool executions.
-total_budget_seconds = 30.0
+# Wall-clock budget for a single alert classification (all LLM calls
+# + all tool calls combined).
+total_budget_seconds    = 30.0
 
-# Capture reasoning trace on each classification (adds dashboard display
-# capability and evaluation transparency at the cost of ~10% storage per report).
+# Capture reasoning trace on each classification. Surfaced in the
+# dashboard and persisted in the report for evaluation transparency.
 reasoning_trace_enabled = true
 
-# Which tools are enabled. Disabling a tool removes it from the prompt
-# and from the registry. Useful for ablation studies.
+# Hybrid auto-enrichment (Phase 5.5, "Option F"). When true, the agent
+# deterministically runs all three tools BEFORE the LLM ever sees the
+# alert, seeding the reasoning_trace with the results. The LLM can then
+# still emit additional tool calls if it wants. Set to false for the
+# pure-LLM-driven tool-use ablation in evaluation runs.
+auto_enrichment         = true
+
+# Tool registration. Disabling a tool removes it from the prompt and
+# from the registry — useful for ablation studies.
 [agent.tools]
-get_alert_history = true
-lookup_environment_context = true
-get_attack_pattern_stats = true
+get_alert_history             = true
+lookup_environment_context    = true
+get_attack_pattern_stats      = true
 
-# Environment knowledge for lookup_environment_context tool.
-# Each entry: a pattern + classification hint the agent can use.
-[[agent.environment.entries]]
-pattern = "172.18.0.2"
-match_type = "exact_ip"
-role = "internal_database"
-description = "MariaDB inside Docker bridge. Port 3306 traffic is expected internal communication."
-classification_hint = "likely_false_positive_if_internal_only"
+# Environment-context entries used by lookup_environment_context.
+# Each entry: pattern + match_type (exact_ip | cidr | url_prefix |
+# url_contains) + optional role / description / classification_hint.
 
 [[agent.environment.entries]]
-pattern = "172.18.0.0/16"
-match_type = "cidr"
-role = "docker_bridge"
-description = "Docker bridge subnet."
-classification_hint = "context_only"
+pattern              = "172.18.0.2"
+match_type           = "exact_ip"
+role                 = "internal_database"
+description          = "EXPECTED INTERNAL — MariaDB inside Docker bridge. Traffic between DVWA and this IP on port 3306 is benign internal database communication."
+classification_hint  = "likely_false_positive_if_internal_only"
 
 [[agent.environment.entries]]
-pattern = "192.168.56.0/24"
-match_type = "cidr"
-role = "host_only_network"
-description = "VirtualBox host-only network — attacker traffic originates here."
-classification_hint = "untrusted_source_likely_attacker"
+pattern              = "172.18.0.0/16"
+match_type           = "cidr"
+role                 = "docker_bridge"
+description          = "EXPECTED INTERNAL — Docker bridge subnet hosting DVWA + MariaDB. Lab infrastructure, not an attacker."
+classification_hint  = "context_only"
+
+[[agent.environment.entries]]
+pattern              = "192.168.56.0/24"
+match_type           = "cidr"
+role                 = "host_only_network"
+description          = "UNTRUSTED EXTERNAL — VirtualBox host-only network where the attacker simulator runs. Treat all traffic from this range as adversarial unless explicitly proven benign."
+classification_hint  = "untrusted_source_likely_attacker"
+
+[[agent.environment.entries]]
+pattern              = "/vulnerabilities/sqli"
+match_type           = "url_prefix"
+role                 = "vulnerable_endpoint"
+description          = "EXPECTED ATTACK TARGET — DVWA SQLi training endpoint."
+classification_hint  = "expected_attack_target"
+
+[[agent.environment.entries]]
+pattern              = "/vulnerabilities/xss"
+match_type           = "url_prefix"
+role                 = "vulnerable_endpoint"
+description          = "EXPECTED ATTACK TARGET — DVWA XSS training endpoint."
+classification_hint  = "expected_attack_target"
+
+# Storage backend (Phase 10). "sqlite" is the default; "json" is the
+# legacy file-per-incident backend, preserved for backwards-compat and
+# evaluation comparison runs.
+[storage]
+backend                  = "sqlite"
+db_path                  = "data/reports.db"
+retention_days           = 90                  # 0 = never expire
+cleanup_interval_seconds = 3600                # 0 = no auto cleanup
 ```
 
 Match types supported: `exact_ip`, `cidr`, `url_prefix`, `url_contains`. Each implemented in `agent_tools.py`.
@@ -769,22 +803,29 @@ A new combined report at `eval_results/<label>_combined_<timestamp>_report.md` c
 
 ## 14. Implementation phases
 
-Each phase ends with a checkpoint requiring user review before proceeding.
+Original plan was 1-10 with day estimates. Current status below. Two
+extra phases (3.5 and 5.5) were inserted during implementation when new
+needs surfaced.
 
-| Phase | Deliverable | Files touched | Est. days |
-|---|---|---|---|
-| **1. Foundation** | This design doc + branch + qwen2.5:3b verified | `docs/AGENT_DESIGN.md` | 0.5–1 |
-| **2. Tools** | Tool registry + 3 tool implementations + unit tests | `src/tool_registry.py`, `src/agent_tools.py`, `src/test_tool_registry.py`, `src/test_agent_tools.py` | 2 |
-| **3. ReAct loop** | ReActAgent class + XML parser + iteration logic + unit tests with mock provider | `src/react_agent.py`, `src/test_react_agent.py`, `src/models.py` (ReasoningStep) | 2–3 |
-| **4. Integration** | ReportGenerator delegation + end-to-end smoke test | `src/report_generator.py`, `src/app.py`, `app.config`, `src/test_integration.py` | 1–2 |
-| **5. Dashboard** | Reasoning trace UI in incident card | `src/static/app.js`, `src/static/style.css`, `src/web_server.py` (if needed) | 1 |
-| **6. Evaluation** | 2×2×2 matrix in evaluation harness + new metrics | `src/evaluation/run_evaluation.py`, `src/evaluation/report_writer.py` | 1–2 |
-| **7. Docs** | README, HANDOFF, RUNBOOK, ARCHITECTURE updates | `README.md`, `docs/*.md` | 1 |
-| **8. Mac port** | UTM + Kali setup runbook for Mac Air M4 | `docs/RUNBOOK.md` Mac section | 1–2 |
-| **9. Demo dry-run** | End-to-end on Mac, demo runbook | `docs/DEMO.md` | 1 |
-| **10. SQLite (separate branch)** | Persistence migration | new branch `feature/sqlite-persistence` | TBD |
+| Phase | Deliverable | Status |
+|---|---|---|
+| **1. Foundation** | This design doc + branch + qwen2.5:3b verified | Done |
+| **2. Tools** | Tool registry + 3 tool implementations + unit tests | Done |
+| **3. ReAct loop** | ReActAgent class + XML parser + iteration logic + tests | Done |
+| **3.5. Serializer** *(inserted)* | Template-v1 JSON serializer + JSONSchema validation | Done |
+| **4. Integration** | ReportGenerator delegation + end-to-end smoke test | Done |
+| **5. Dashboard** | Reasoning trace UI in incident card | Done |
+| **5.5. Hybrid enrichment** *(inserted)* | Option F deterministic pre-LLM tool calls | Done |
+| **6. Evaluation** | 5-config staircase ablation (revised from 2×2×2) | In progress (operator runs) |
+| **7. Docs** | README, HANDOFF, ARCHITECTURE, runbooks | Done |
+| **8. Mac port** | UTM + Kali setup runbook for Apple Silicon | Pending |
+| **9. Demo dry-run** | End-to-end on Mac, demo runbook | Pending |
+| **10. SQLite (separate branch)** | Persistence migration; later merged into the main feature branch | Done (`feature/sqlite-persistence`) |
 
-Total ETA for Phases 1–9: 11–15 days. Within capstone timeline per user constraint.
+For the live status (which branch has what, which tests pass, what's
+queued next), see `docs/HANDOFF.md`. Phase 6's "2×2×2 matrix" was
+replaced with a 5-config staircase ablation; the rationale and runbook
+live in `docs/PHASE_6_RUNBOOK.md`.
 
 ---
 
@@ -804,21 +845,37 @@ Total ETA for Phases 1–9: 11–15 days. Within capstone timeline per user cons
 | 10 | Reasoning trace UI: static render only | Live streaming is stretch; static suffices for spec + demo |
 | 11 | SQLite migration: separate branch after this is merged | No scope creep mid-implementation |
 
+The decisions below were not in the original draft. They were made during
+implementation when new evidence or requirements surfaced.
+
+| # | Decision | Rationale |
+|---|---|---|
+| 12 | Suricata runs custom-only (ET Open + built-in protocol-event rules disabled in the lab) | Keeps the alert feed scoped to the two attack classes the project demonstrates; every alert traceable to a team-written rule; removes ET double-alerting + ET SCAN noise. See `lab/suricata/README.md` |
+| 13 | `attack_type` resolved deterministically from custom SID range when available (SQLi: 1000101-1000113, XSS: 1000001-1000058) | qwen 3B sometimes hedged `attack_type` to "Other / unclassified" on broad-tier alerts while its own rationale clearly named SQLi. SID-range path is correctness-first; string fallback covers ET Open or unknown SIDs |
+| 14 | MITRE tactic override scans signature **and** URL for credential keywords, and preserves the LLM's tactic when already valid | Original override forced SQLi -> Initial Access whenever the signature msg lacked USER/PASS. Custom rule msgs are generic, so credential intent lives in the URL. Override now bumps to Credential Access on URL evidence; if the LLM already picked a valid tactic, no override fires |
+| 15 | Alert severity scale = critical / high / low. No "medium" tier | Aligns with custom rules' P1/P2/P3 priority tiers. Suricata severity 3+ maps to "low"; the dashboard Medium card and filter button were removed |
+| 16 | SQLite is the default storage backend; JSON file backend stays selectable | Phase 10. WAL mode, thread-local connections, hybrid schema (indexed columns + full template JSON blob). Enables cross-run history queries and retention sweep. Switchable via `[storage].backend = "json"` for ablation runs |
+| 17 | Hybrid auto-enrichment (Option F) is the default agent behaviour | qwen 3B's tool-call adherence drifts when classifying from msg alone. Phase 1 of Option F runs the 3 tools deterministically before the LLM ever sees the alert; Phase 2 (the LLM loop) can still emit further tool calls. Pure LLM-driven tool use stays available via `auto_enrichment = false` for the ablation row |
+| 18 | Suricata SQLi rule pcres use `[\s+]` (not `\s`) for inter-keyword spacing | DVWA's GET form encodes spaces as `+`; Suricata's `http.uri` buffer decodes `%XX` but leaves `+` as `+`. With bare `\s`, the P1 UNION SELECT rule never fired on the canonical payload, capping severity at high. `[\s+]` matches space, decoded `%20`, and `+` |
+
 ---
 
-## 16. Open questions
+## 16. Design changes during implementation
 
-These do not block Phase 1. Resolved by end of Phase 2 at latest.
+The body of this doc still describes the original design. Where the
+implementation diverged, the divergence is captured in section 15 above
+(decisions 12 onwards) and explained in detail in:
 
-1. **Should `lookup_environment_context` be called automatically for every alert, or only when the model decides?** Current design: model decides. Counter-argument: marker may want guaranteed context use. Decision deferred to Phase 3 prompt tuning.
-2. **Reasoning trace storage cost.** Each trace adds ~500–2000 bytes to the persisted JSON report. For 100 incidents/day that's 50–200KB/day. Acceptable but worth flagging when SQLite migration plans the schema.
-3. **Should `parse_failure_count` and `tool_calls` be surfaced in the API response or kept internal?** Current design: included in `AlertClassification`, so they flow through to the dashboard and to evaluation. Confirm in Phase 4.
+- `docs/HANDOFF.md` — written context for everything that has happened
+- `docs/ARCHITECTURE.md` — hand-drawn diagram + walkthrough of the
+  current data flow
+- `docs/PHASE_6_RUNBOOK.md` — current evaluation strategy (5-config
+  staircase, supersedes the 2×2×2 matrix described in section 12)
+- `docs/PHASE_10_SQLITE.md` — SQLite layer design
+- `lab/suricata/README.md` — custom-only ruleset deploy + validation
 
----
-
-## 17. Next steps after this doc is approved
-
-1. User reviews and approves (or requests revisions).
-2. After approval: Phase 2 begins — tool registry + tool implementations.
-3. Each phase ends with a checkpoint commit + user review before the next phase starts.
-4. No phase merges to `main` until all phases are complete and evaluation passes.
+When reading the rest of this doc, treat sections 1-13 as the original
+design intent. They are accurate at the level of "why we built it this
+way" but a few specific numbers (test counts, exact eval matrix shape,
+default `lookup_environment_context` entries) have moved on. Always
+cross-check current-state details against `HANDOFF.md` or the live code.
