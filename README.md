@@ -18,7 +18,7 @@ An AI-powered Security Operations Centre (SOC) alert triage system that automate
 | You are... | Start here |
 |---|---|
 | **Picking up the project cold** (new chat / new teammate / future-you) | **`docs/HANDOFF.md`** — single source of truth for current state, branches, what's done, what's left |
-| **Want a visual map of how the system works** | **`docs/ARCHITECTURE.md`** — 5 Mermaid diagrams: containers, alert lifecycle, ReAct loop, Stage 2 pipeline, module map |
+| **Want a visual map of how the system works** | **`docs/ARCHITECTURE.md`** — hand-drawn system overview diagram + walkthrough of every component and arrow |
 | Looking for the agent design rationale | `docs/AGENT_DESIGN.md` — full ReAct + tools + hybrid auto-enrichment spec |
 | Running the evaluation campaign | `docs/PHASE_6_RUNBOOK.md` — 5-config staircase ablation procedure |
 | Understanding the SQLite migration | `docs/PHASE_10_SQLITE.md` — schema, concurrency, retention, roll-back |
