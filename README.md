@@ -18,10 +18,11 @@ An AI-powered Security Operations Centre (SOC) alert triage system that automate
 | You are... | Start here |
 |---|---|
 | **Picking up the project cold** (new chat / new teammate / future-you) | **`docs/HANDOFF.md`** — single source of truth for current state, branches, what's done, what's left |
+| **Want a visual map of how the system works** | **`docs/ARCHITECTURE.md`** — 5 Mermaid diagrams: containers, alert lifecycle, ReAct loop, Stage 2 pipeline, module map |
 | Looking for the agent design rationale | `docs/AGENT_DESIGN.md` — full ReAct + tools + hybrid auto-enrichment spec |
 | Running the evaluation campaign | `docs/PHASE_6_RUNBOOK.md` — 5-config staircase ablation procedure |
 | Understanding the SQLite migration | `docs/PHASE_10_SQLITE.md` — schema, concurrency, retention, roll-back |
-| Deploying custom XSS Suricata rules | `lab/suricata/README.md` — install + validation hand-tests |
+| Deploying custom XSS + SQLi Suricata rules | `lab/suricata/README.md` — install + validation hand-tests |
 | Setting up the lab from scratch | the **Setup** section below |
 
 **Branch state:** active development lives on `feature/sqlite-persistence` (latest, includes everything). `feature/agentic-react-loop` carries the same agent work without SQLite. `main` is pre-agentic — do not run from `main` for a demo. See `docs/HANDOFF.md` for the merge sequence.

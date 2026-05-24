@@ -7,6 +7,10 @@ bottom and get oriented in 15 minutes.
 If you have time for only one section: **Quick orientation** (next) and
 **What's left** (near the bottom).
 
+> **Want pictures, not words?** Read `docs/ARCHITECTURE.md` first — five
+> Mermaid diagrams of containers, alert lifecycle, ReAct loop, Stage 2
+> pipeline, and module dependencies. Come back here for the narrative.
+
 ---
 
 ## Quick orientation
