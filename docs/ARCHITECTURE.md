@@ -25,100 +25,109 @@ or open in any Mermaid-aware viewer.
 
 ---
 
-## 1. System overview — what happens end to end
+## 1. System overview
 
-Beginner-friendly version. Plain-English roles instead of file names; no host
-paths or port numbers. Read it like a story: an attacker pokes a deliberately
-broken web app, a network sensor flags the request, and our triage system on
-the analyst's computer figures out what happened and shows it on a dashboard.
+Attacker pokes a vulnerable web app inside a VM, Suricata flags the attack,
+and the host-side Python app classifies it and writes a report. The diagram
+shows every component and how data moves between them.
 
 ```mermaid
 flowchart TB
-    subgraph LAB["Attack Lab — runs inside a virtual machine"]
+    subgraph LAB["Attack Lab (Kali VM)"]
+        ATK["Attacker<br/>(browser or curl)"]
+        DVWA["DVWA<br/>(Docker container, port 8080)"]
+        IDS["Suricata IDS<br/>(monitors Docker bridge,<br/>custom rules only)"]
+        EVE["eve.json<br/>(JSON alert events)"]
+
+        ATK -->|HTTP attack payload| DVWA
+        DVWA -.->|Docker bridge mirror| IDS
+        IDS -->|append alert event<br/>priority 1/2/3| EVE
+    end
+
+    subgraph BRIDGE["Bridge"]
+        SHARE["Shared folder<br/>(eve.json mirror)"]
+    end
+
+    EVE -->|tail -F redirect| SHARE
+
+    subgraph HOST["Host (Python + Ollama)"]
         direction TB
-        ATK["Attacker<br/>(simulated bad guy)"]
-        WEB["Vulnerable Web App<br/>(deliberately broken, for practice)"]
-        IDS["Network Sensor<br/>(intrusion detection — watches all traffic)"]
-        LOG["Alert Log<br/>(file the sensor writes each finding to)"]
+        LM["log_monitor<br/>(tails eve.json → AlertRecord)"]
+        IM["incident_manager<br/>(group by source IP,<br/>2-min window, 3 s debounce)"]
+        RG["report_generator<br/>(Stage 2 narrative + filters)"]
+        AG["react_agent<br/>(Stage 1 classifier, per alert)"]
+        OL["Ollama<br/>(qwen2.5:3b on port 11434)"]
+        DB[(SQLite reports.db)]
+        WS["web_server<br/>(Flask + Socket.IO on port 5000)"]
 
-        ATK -->|sends attack request| WEB
-        WEB -.->|all traffic seen by| IDS
-        IDS -->|one line per alert| LOG
+        SHARE --> LM
+        LM -->|AlertRecord| IM
+        LM -.->|raw_alert event| WS
+        IM -->|incident snapshot<br/>after debounce| RG
+        RG -->|classify(alert), per alert| AG
+        AG <-->|Stage 1 LLM call| OL
+        RG <-->|Stage 2 LLM call| OL
+        RG -->|save report| DB
+        RG -.->|report_ready event| WS
+        WS <-->|history queries| DB
     end
 
-    subgraph BRIDGE["Bridge — a file both sides can read"]
-        SHARE["Shared Folder"]
-    end
-
-    LOG -->|live-stream new lines| SHARE
-
-    subgraph SYS["Our AI Triage System — runs on the analyst's computer"]
-        direction TB
-        READ["Alert Reader<br/>(watches the shared file for new lines)"]
-        GROUP["Incident Grouper<br/>(combines related alerts from the same attacker)"]
-        CLASS["AI Classifier<br/>(decides if each alert is a real attack or noise)"]
-        REPORT["Incident Reporter<br/>(writes a plain-English summary of the incident)"]
-        BRAIN["Local AI Model<br/>(small open-source language model — no internet needed)"]
-        DB[("Incident Database<br/>(remembers every incident for later)")]
-        DASH["Dashboard Server<br/>(serves the web page)"]
-
-        SHARE --> READ
-        READ -->|one alert at a time| GROUP
-        READ -.->|live feed of every alert| DASH
-        GROUP -->|grouped incident| CLASS
-        CLASS -->|classified alerts| REPORT
-        CLASS <-->|asks AI for verdict| BRAIN
-        REPORT <-->|asks AI for narrative| BRAIN
-        REPORT -->|save report| DB
-        REPORT -.->|notify dashboard| DASH
-        DASH <-->|read history on demand| DB
-    end
-
-    USER["Security Analyst<br/>(opens the dashboard in a web browser)"]
-    DASH <-->|web page + live updates| USER
+    USER["Analyst browser<br/>(dashboard at port 5000)"]
+    WS <-->|WebSocket events + REST| USER
 ```
 
-**The story in one paragraph.** A simulated attacker fires malicious requests
-at a deliberately-broken web app inside a virtual machine. A network sensor
-watches the traffic and writes each suspicious request as a new line in an
-alert log. The triage system on the analyst's computer tails that log, groups
-related alerts from the same attacker into a single "incident", uses a small
-local AI model to decide which alerts are real attacks and which are noise, and
-finally writes a plain-English incident summary that lands on the analyst's
-dashboard.
+### The flow, end to end
 
-**Why two machines?** The attack lab is risky software on purpose — a
-deliberately vulnerable web app plus traffic that looks like real attacks. We
-keep it inside a virtual machine so it can't accidentally affect the analyst's
-computer. The triage system runs outside the VM because it needs more memory
-and uses an AI model that we don't want to install inside the throw-away lab.
+Attacker fires HTTP at DVWA. Suricata watches the Docker bridge, matches a
+custom rule, and appends one line to `eve.json`. That file gets mirrored into
+the shared folder. The host tails the mirror, groups alerts by source IP,
+classifies each one with the local LLM, writes a summary report across all
+the related alerts, saves it to SQLite, and pushes the result to the analyst's
+browser over a WebSocket.
 
-**Why a file as the bridge?** Suricata (the sensor) writes its findings to a
-file. By making that file visible to both machines via a shared folder, the
-triage system can read it without any network connection between the two. No
-open ports, no daemons to manage — just a file that grows over time.
+### Why split the lab and the triage system across two machines?
 
-**Why a *local* AI model?** The "Local AI Model" box is a small open-source
-language model running on the analyst's own computer (via a tool called
-Ollama). Local means no data ever leaves the machine, no API costs, no
-internet dependency. The model is small (~3 billion parameters) but more than
-good enough for this task.
+DVWA is supposed to be broken. You don't want it on the same machine as your
+normal files in case the container ever gets exploited. So the lab sits inside
+a VM that you can snapshot and roll back. The triage system runs on the host
+because the LLM wants more RAM than you'd give a throwaway VM, and you don't
+want to reinstall a 2 GB model every time you reset the lab.
 
-**What does the AI actually do?** Two distinct jobs, both shown above:
-1. **Classify each alert** — "Is this a real attack or a false alarm?" The AI
-   Classifier checks history ("has this attacker shown up before?") and
-   environment context ("is this IP one of our own systems?") before deciding.
-2. **Write the incident summary** — once the related alerts are classified,
-   the Incident Reporter asks the AI to weave them into a plain-English story
-   that the analyst can read in seconds.
+### Why a file as the bridge between them?
 
-**Arrow conventions in this diagram.**
-- **Solid arrow** = a normal call or piece of data moving from A to B.
-- **Dashed arrow** = an asynchronous event or a passive observation (e.g. the
-  sensor watches mirrored traffic; the dashboard gets notified after a report
-  saves).
-- **Two-way arrow** = a request followed by a response on the same channel
-  (e.g. the Classifier asks the AI a question and waits for the answer).
+Suricata writes `eve.json` whether anyone is reading it or not. By exposing
+that file to the host via a VirtualBox shared folder, the Python side just
+tails it. No extra ports opened on the VM, no network protocol, no daemon to
+keep alive. The VM stays sealed except for that one file path.
+
+### Why qwen2.5:3b via Ollama?
+
+Runs entirely on your computer. No API keys, no usage costs, nothing leaves
+the machine. 3 billion parameters is small enough to be fast on a laptop and
+big enough to handle the structured classification job with tool calls.
+
+### What the AI actually does
+
+Two distinct LLM jobs, both visible in the diagram:
+
+1. **`react_agent`** classifies each alert individually: is this a real
+   attack or noise? It first auto-runs three lookups (the attacker's prior
+   alerts, the environment context for the source IP, recent stats for this
+   attack type) and then asks the LLM for a verdict with that context already
+   in the prompt.
+2. **`report_generator`** makes a second LLM call once all alerts in the
+   incident are classified, this time asking for a single narrative across
+   all of them, plus the MITRE tactic and a suggested response.
+
+### Arrow conventions
+
+- Solid arrow: synchronous call or a piece of data being handed off.
+- Dashed arrow: asynchronous event or passive observation. The Docker bridge
+  mirror, the live raw-alert feed to the dashboard, and the report-ready
+  notification all happen without anyone waiting on a response.
+- Two-way arrow: request and response on the same channel. The LLM calls,
+  the dashboard's history queries to SQLite, and the WebSocket between the
+  server and the browser all behave this way.
 
 ---
 
