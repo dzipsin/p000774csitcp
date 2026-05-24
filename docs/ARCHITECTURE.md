@@ -27,107 +27,77 @@ or open in any Mermaid-aware viewer.
 
 ## 1. System overview
 
-Attacker pokes a vulnerable web app inside a VM, Suricata flags the attack,
-and the host-side Python app classifies it and writes a report. The diagram
-shows every component and how data moves between them.
+Attacker pokes a vulnerable web app inside a VM. Suricata flags the attack
+and writes it to a log. The host-side Python app reads that log, classifies
+each alert with a local LLM, writes a report, and pushes the result to the
+analyst's browser.
 
-```mermaid
-flowchart TB
-    subgraph LAB["Attack Lab (Kali VM)"]
-        ATK["Attacker<br/>(browser or curl)"]
-        DVWA["DVWA<br/>(Docker container, port 8080)"]
-        IDS["Suricata IDS<br/>(monitors Docker bridge,<br/>custom rules only)"]
-        EVE["eve.json<br/>(JSON alert events)"]
+![System overview](../System%20Overview%20Diagram.png)
 
-        ATK -->|HTTP attack payload| DVWA
-        DVWA -.->|Docker bridge mirror| IDS
-        IDS -->|append alert event<br/>priority 1/2/3| EVE
-    end
+### The flow, by colour zone
 
-    subgraph BRIDGE["Bridge"]
-        SHARE["Shared folder<br/>(eve.json mirror)"]
-    end
+**Red zone — Kali VM.** Attacker fires HTTP at DVWA. Suricata watches the
+Docker bridge, matches a custom rule, and appends one line to `eve.json`.
 
-    EVE -->|tail -F redirect| SHARE
+**Yellow zone — bridge.** A `tail -F` running inside the VM streams new
+`eve.json` lines into the VirtualBox shared folder so the host can see
+them without any network connection between the two machines.
 
-    subgraph HOST["Host (Python + Ollama)"]
-        direction TB
-        LM["log_monitor<br/>(tails eve.json → AlertRecord)"]
-        IM["incident_manager<br/>(group by source IP,<br/>2-min window, 3 s debounce)"]
-        RG["report_generator<br/>(Stage 2 narrative + filters)"]
-        AG["react_agent<br/>(Stage 1 classifier, per alert)"]
-        OL["Ollama<br/>(qwen2.5:3b on port 11434)"]
-        DB[(SQLite reports.db)]
-        WS["web_server<br/>(Flask + Socket.IO on port 5000)"]
+**Blue zone — host.** `log_monitor` tails the mirror and parses each line
+into an `AlertRecord`. `incident_manager` groups records by source IP using
+a 2-minute sliding window, then waits 3 seconds (debounce) so bursts of
+related alerts collapse into one regeneration. When the debounce expires,
+`report_generator` builds the report: it calls `react_agent` once per alert
+for Stage 1 classification, then makes its own Stage 2 LLM call for the
+narrative across all classified alerts. The final report saves to
+`SQLite reports.db` and is broadcast through `web_server` to the analyst's
+browser. Raw alerts also stream straight from `log_monitor` to the browser
+via WebSocket so the analyst sees them the moment they arrive — that's the
+long dashed arrow at the bottom of the diagram.
 
-        SHARE --> LM
-        LM -->|AlertRecord| IM
-        LM -.->|raw_alert event| WS
-        IM -->|incident snapshot<br/>after debounce| RG
-        RG -->|classify(alert), per alert| AG
-        AG <-->|Stage 1 LLM call| OL
-        RG <-->|Stage 2 LLM call| OL
-        RG -->|save report| DB
-        RG -.->|report_ready event| WS
-        WS <-->|history queries| DB
-    end
+### Why a VM and a host instead of one machine
 
-    USER["Analyst browser<br/>(dashboard at port 5000)"]
-    WS <-->|WebSocket events + REST| USER
-```
+DVWA is supposed to be broken. You don't want it on the same machine as
+your normal files in case the container ever gets exploited. The VM is
+throwaway and you can snapshot/roll back. The triage system lives on the
+host because the LLM wants more RAM than you'd give a throwaway VM, and
+you don't want to reinstall a 2 GB model every time you reset the lab.
 
-### The flow, end to end
+### Why a file as the bridge
 
-Attacker fires HTTP at DVWA. Suricata watches the Docker bridge, matches a
-custom rule, and appends one line to `eve.json`. That file gets mirrored into
-the shared folder. The host tails the mirror, groups alerts by source IP,
-classifies each one with the local LLM, writes a summary report across all
-the related alerts, saves it to SQLite, and pushes the result to the analyst's
-browser over a WebSocket.
-
-### Why split the lab and the triage system across two machines?
-
-DVWA is supposed to be broken. You don't want it on the same machine as your
-normal files in case the container ever gets exploited. So the lab sits inside
-a VM that you can snapshot and roll back. The triage system runs on the host
-because the LLM wants more RAM than you'd give a throwaway VM, and you don't
-want to reinstall a 2 GB model every time you reset the lab.
-
-### Why a file as the bridge between them?
-
-Suricata writes `eve.json` whether anyone is reading it or not. By exposing
-that file to the host via a VirtualBox shared folder, the Python side just
-tails it. No extra ports opened on the VM, no network protocol, no daemon to
+Suricata writes `eve.json` whether anyone is reading it or not. Exposing
+that file to the host via a shared folder means the Python side just tails
+a file. No extra ports opened on the VM, no network protocol, no daemon to
 keep alive. The VM stays sealed except for that one file path.
 
-### Why qwen2.5:3b via Ollama?
+### Why qwen2.5:3b via Ollama
 
 Runs entirely on your computer. No API keys, no usage costs, nothing leaves
-the machine. 3 billion parameters is small enough to be fast on a laptop and
-big enough to handle the structured classification job with tool calls.
+the machine. 3 B parameters is small enough to be fast on a laptop and big
+enough to handle the structured classification with tool calls.
 
 ### What the AI actually does
 
-Two distinct LLM jobs, both visible in the diagram:
+Two distinct LLM jobs, both shown in the blue zone:
 
-1. **`react_agent`** classifies each alert individually: is this a real
-   attack or noise? It first auto-runs three lookups (the attacker's prior
-   alerts, the environment context for the source IP, recent stats for this
-   attack type) and then asks the LLM for a verdict with that context already
-   in the prompt.
-2. **`report_generator`** makes a second LLM call once all alerts in the
-   incident are classified, this time asking for a single narrative across
-   all of them, plus the MITRE tactic and a suggested response.
+1. `react_agent` (Stage 1) classifies one alert at a time. Before it asks
+   the LLM anything, it auto-runs three lookups — the source IP's prior
+   alerts, the environment context for that IP, and recent stats for the
+   attack type — and seeds those results into the prompt. Then it asks the
+   LLM for a verdict.
+2. `report_generator` (Stage 2) makes one more LLM call after every alert
+   in the incident has been classified. This is where the plain-English
+   narrative, the MITRE tactic, and the suggested responses come from.
 
-### Arrow conventions
+### Arrow conventions in the diagram
 
-- Solid arrow: synchronous call or a piece of data being handed off.
-- Dashed arrow: asynchronous event or passive observation. The Docker bridge
-  mirror, the live raw-alert feed to the dashboard, and the report-ready
-  notification all happen without anyone waiting on a response.
-- Two-way arrow: request and response on the same channel. The LLM calls,
-  the dashboard's history queries to SQLite, and the WebSocket between the
-  server and the browser all behave this way.
+- **Solid arrows** are calls or data being handed off. The label names the
+  data shape (`AlertRecord`, `incident snapshot`) or the call
+  (`classify(alert)`, `Stage 1 LLM call (prompt → response)`).
+- **Dashed arrows** are async events with nobody waiting for a response.
+  In this diagram there are two: `raw_alert event` from `log_monitor` and
+  `report_ready event` from `report_generator`, both going to `web_server`
+  for WebSocket broadcast to the browser.
 
 ---
 
