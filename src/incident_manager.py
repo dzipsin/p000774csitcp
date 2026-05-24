@@ -198,7 +198,7 @@ class IncidentManager:
             return
 
         arrival_time = time.time()
-        attack_type = extract_attack_type(alert.signature)
+        attack_type = extract_attack_type(alert.signature, alert.signature_id)
         group_key = self._compute_group_key(src_ip, attack_type)
 
         with self._lock:

@@ -372,7 +372,7 @@ class ReActAgent:
         start_time = time.monotonic()
 
         alert_id = str(alert.flow_id) if alert.flow_id else str(uuid.uuid4())
-        attack_type = extract_attack_type(alert.signature)
+        attack_type = extract_attack_type(alert.signature, alert.signature_id)
         initial_user_prompt = _build_singleshot_user_prompt(alert)
 
         # --- Auto-enrichment phase (controlled by auto_enrichment flag) ---

@@ -306,15 +306,37 @@ class IncidentReport:
 # Attack type classification (rule-based, shared utility)
 # ---------------------------------------------------------------------------
 
-def extract_attack_type(signature: str) -> str:
+# SID ranges of our custom rule files (see lab/suricata/).
+# These map deterministically to attack types regardless of msg wording,
+# which avoids substring-match misses on signatures like
+# "P2 - SQL Comment Sequence in URI" (no "SQLI" / "SQL INJECTION" token).
+_CUSTOM_XSS_SID_RANGE = range(1000001, 1000059)    # xss_alerts.rules: 1000001-1000058
+_CUSTOM_SQLI_SID_RANGE = range(1000101, 1000114)   # sqli_alerts.rules: 1000101-1000113
+
+
+def extract_attack_type(signature: str, signature_id: Optional[int] = None) -> str:
     """Classify a Suricata alert signature into a broad attack type.
 
-    This is deterministic and fast, used for grouping decisions and report
+    Deterministic and fast; used for grouping decisions and report
     population. Runs before any LLM call.
 
+    Resolution order:
+      1. signature_id in a custom SID range (SQLi / XSS) -> definitive
+      2. case-insensitive substring match on the signature msg
+      3. "Other"
+
+    Pass signature_id when available -- it is robust against msg-wording
+    changes in the rule files. Falls back to substring matching for ET
+    Open or unknown SIDs.
+
     Handles empty/None signatures gracefully (returns "Other").
-    Case-insensitive matching.
     """
+    if signature_id is not None:
+        if signature_id in _CUSTOM_SQLI_SID_RANGE:
+            return "SQLi"
+        if signature_id in _CUSTOM_XSS_SID_RANGE:
+            return "XSS"
+
     if not signature:
         return "Other"
 

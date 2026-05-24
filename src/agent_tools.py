@@ -130,7 +130,7 @@ def _aggregate_alert_history(
     for a in in_memory_alerts:
         if a.timestamp_epoch > 0:
             timestamps.append(a.timestamp_epoch)
-        atype = extract_attack_type(a.signature)
+        atype = extract_attack_type(a.signature, a.signature_id)
         if atype != "Other":
             attack_types.add(atype)
 
@@ -138,7 +138,7 @@ def _aggregate_alert_history(
         ts = d["timestamp_epoch"]
         if ts > 0:
             timestamps.append(ts)
-        atype = extract_attack_type(d["signature"])
+        atype = extract_attack_type(d["signature"], d.get("signature_id"))
         if atype != "Other":
             attack_types.add(atype)
 
@@ -507,7 +507,7 @@ def _aggregate_pattern_stats(
     in_memory_incidents = incident_manager.get_all_incidents()
     for incident in in_memory_incidents:
         for alert in incident.alerts:
-            if extract_attack_type(alert.signature) != attack_type:
+            if extract_attack_type(alert.signature, alert.signature_id) != attack_type:
                 continue
             ts = alert.timestamp_epoch
             if ts <= 0 or ts < since:

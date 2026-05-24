@@ -425,7 +425,7 @@ def _confidence_score(alert: AlertRecord, classification: Optional[AlertClassifi
         score += 0.2
 
     # Known attack type (not "Other") → classifier had a hit
-    attack_type = extract_attack_type(alert.signature)
+    attack_type = extract_attack_type(alert.signature, alert.signature_id)
     if attack_type != "Other":
         score += 0.1
 
@@ -793,7 +793,7 @@ class ReportGenerator:
 
         # --- Derive attack types and severities ---
         detected_attacks = sorted({
-            extract_attack_type(a.signature) for a in incident.alerts
+            extract_attack_type(a.signature, a.signature_id) for a in incident.alerts
         } - {"Other"}) or ["Other"]
 
         overall_severity = _compute_overall_severity(classifications)
@@ -1012,7 +1012,7 @@ class ReportGenerator:
     def _classify_single_singleshot(self, alert: AlertRecord) -> AlertClassification:
         """Classify a single alert with retry on parse/validation failure."""
         alert_id = str(alert.flow_id) if alert.flow_id else str(uuid.uuid4())
-        attack_type = extract_attack_type(alert.signature)
+        attack_type = extract_attack_type(alert.signature, alert.signature_id)
         user_prompt = _build_stage1_user_prompt(alert)
 
         last_error = ""
@@ -1241,7 +1241,7 @@ class ReportGenerator:
 
         # Pair each alert with its classification by index
         for alert, cls in zip(alerts, classifications):
-            attack_type = extract_attack_type(alert.signature)
+            attack_type = extract_attack_type(alert.signature, alert.signature_id)
             http = (alert.raw_event or {}).get("http", {})
             payload = ""
             if isinstance(http, dict):
@@ -1597,7 +1597,7 @@ def _generate_rule_based_suggestions(
     if "XSS" in detected_set:
         seen_eps: set = set()
         for a in incident.alerts:
-            if extract_attack_type(a.signature) != "XSS":
+            if extract_attack_type(a.signature, a.signature_id) != "XSS":
                 continue
             http = (a.raw_event or {}).get("http", {})
             if not isinstance(http, dict):
