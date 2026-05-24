@@ -1858,6 +1858,33 @@ _MITRE_PRIORITY = {
 }
 
 
+_CREDENTIAL_KEYWORDS = (
+    "USER", "PASS", "PASSWD", "CRED", "TOKEN", "LOGIN", "AUTH", "SECRET",
+)
+
+
+def _alert_mentions_credentials(alert: AlertRecord) -> bool:
+    """True if the alert's signature msg OR the HTTP URL names a credential token.
+
+    Our custom SQLi rule msgs are generic ("P1 - SQLi UNION SELECT in URI")
+    so credential intent only shows up in the URL payload (e.g.
+    ``?id=1' UNION SELECT user,password FROM users#``). Scanning both
+    keeps coverage for ET Open rules whose msg already names USER/PASS.
+    """
+    sig_upper = (alert.signature or "").upper()
+    if any(k in sig_upper for k in _CREDENTIAL_KEYWORDS):
+        return True
+    raw = alert.raw_event or {}
+    if not isinstance(raw, dict):
+        return False
+    http = raw.get("http") or {}
+    if isinstance(http, dict):
+        url_upper = str(http.get("url", "") or "").upper()
+        if any(k in url_upper for k in _CREDENTIAL_KEYWORDS):
+            return True
+    return False
+
+
 def _override_mitre_tactic(
     detected_attacks: List[str],
     current_tactic: str,
@@ -1867,10 +1894,11 @@ def _override_mitre_tactic(
 
     Logic:
       1. Map each detected attack type to its canonical MITRE tactic.
-      2. If SQLi present AND any alert signature mentions USER/PASS,
+      2. If SQLi present AND any alert signature OR URL names credentials,
          bump to "Credential Access" (subsumes Initial Access).
-      3. Pick the highest-priority tactic from the candidate set.
-      4. If the chosen tactic differs from current_tactic, override.
+      3. If current_tactic is already in the candidate set, preserve it
+         (LLM picked something valid; no override needed).
+      4. Otherwise pick the highest-priority tactic and override.
 
     Returns (final_tactic, was_overridden).
     """
@@ -1886,14 +1914,15 @@ def _override_mitre_tactic(
     if not candidates:
         return current_tactic, False
 
-    # SQLi targeting credentials -> bump to Credential Access
+    # SQLi payload (signature or URL) names credentials -> Credential Access
     if "SQLi" in detected_attacks and incident_alerts:
-        for a in incident_alerts:
-            sig_upper = (a.signature or "").upper()
-            if "USER" in sig_upper or "PASS" in sig_upper or "CREDENTIAL" in sig_upper:
-                candidates.add("Credential Access")
-                candidates.discard("Initial Access")
-                break
+        if any(_alert_mentions_credentials(a) for a in incident_alerts):
+            candidates.add("Credential Access")
+            candidates.discard("Initial Access")
+
+    # Preserve LLM's tactic when it is already in the candidate set
+    if current_tactic in candidates:
+        return current_tactic, False
 
     chosen = max(candidates, key=lambda t: _MITRE_PRIORITY.get(t, 0))
     return chosen, chosen != current_tactic

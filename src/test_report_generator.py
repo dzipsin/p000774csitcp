@@ -713,7 +713,10 @@ def test_mitre_override_sqli_to_initial_access():
     fixed, overridden = _override_mitre_tactic(
         detected_attacks=["SQLi"],
         current_tactic="Reconnaissance",
-        incident_alerts=[_make_alert(signature="ET WEB_SERVER SQL Injection generic")],
+        incident_alerts=[_make_alert(
+            signature="ET WEB_SERVER SQL Injection generic",
+            http_url="",   # genuinely no credential keywords anywhere
+        )],
     )
     assert fixed == "Initial Access", f"Expected Initial Access, got '{fixed}'"
     assert overridden is True
@@ -785,12 +788,42 @@ def test_mitre_override_mixed_attacks_picks_highest_priority():
     fixed, overridden = _override_mitre_tactic(
         detected_attacks=["SQLi", "XSS", "CommandInjection"],
         current_tactic="Reconnaissance",
-        incident_alerts=[_make_alert(signature="generic SQLi")],
+        incident_alerts=[_make_alert(signature="generic SQLi", http_url="")],
     )
     # CommandInjection -> Execution (priority 4) > Initial Access (priority 3)
     assert fixed == "Execution", f"Expected Execution, got '{fixed}'"
     assert overridden is True
     print("    PASS: highest-priority tactic chosen from mixed attacks")
+
+
+def test_mitre_override_credentials_via_url_payload():
+    print("\n=== Test 28: MITRE override: SQLi with creds in URL -> Credential Access ===")
+    fixed, overridden = _override_mitre_tactic(
+        detected_attacks=["SQLi"],
+        current_tactic="Reconnaissance",
+        incident_alerts=[_make_alert(
+            signature="P1 - SQLi UNION SELECT in URI",   # no USER/PASS in msg
+            http_url="/vulnerabilities/sqli/?id=1%27+UNION+SELECT+user%2C+password+FROM+users%23",
+        )],
+    )
+    assert fixed == "Credential Access", f"Expected Credential Access, got '{fixed}'"
+    assert overridden is True
+    print("    PASS: SQLi with credential keywords in URL -> Credential Access")
+
+
+def test_mitre_override_preserves_llm_when_already_valid():
+    print("\n=== Test 29: MITRE override: preserves LLM's Credential Access ===")
+    fixed, overridden = _override_mitre_tactic(
+        detected_attacks=["SQLi"],
+        current_tactic="Credential Access",
+        incident_alerts=[_make_alert(
+            signature="P1 - SQLi UNION SELECT in URI",
+            http_url="/vulnerabilities/sqli/?id=1%27+UNION+SELECT+user%2C+password+FROM+users%23",
+        )],
+    )
+    assert fixed == "Credential Access", f"Expected Credential Access, got '{fixed}'"
+    assert overridden is False, "Should preserve LLM's choice when it is in the candidate set"
+    print("    PASS: LLM's correct Credential Access preserved (no override)")
 
 
 def test_mitre_override_integrated_in_generate():
