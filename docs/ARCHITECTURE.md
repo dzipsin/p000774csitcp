@@ -25,81 +25,100 @@ or open in any Mermaid-aware viewer.
 
 ---
 
-## 1. System overview — containers and boundaries
+## 1. System overview — what happens end to end
 
-Big-picture: what runs where and how data crosses the VM ↔ host boundary.
+Beginner-friendly version. Plain-English roles instead of file names; no host
+paths or port numbers. Read it like a story: an attacker pokes a deliberately
+broken web app, a network sensor flags the request, and our triage system on
+the analyst's computer figures out what happened and shows it on a dashboard.
 
 ```mermaid
 flowchart TB
-    subgraph VM["Kali VM (VirtualBox)"]
-        AtkBrowser["Attacker browser<br/>or curl"]
-        DVWA["DVWA<br/>Docker container, port 8080"]
-        Suricata["Suricata IDS<br/>monitors Docker bridge<br/>custom rules ONLY"]
-        Rules["/var/lib/suricata/rules/<br/>xss_alerts.rules sid 1000001-1000058<br/>sqli_alerts.rules sid 1000101-1000113"]
-        Eve["/var/log/suricata/eve.json<br/>JSON alert events"]
-        Tail["tail -F (background process)"]
-
-        AtkBrowser -->|HTTP attack payload| DVWA
-        DVWA -.->|Docker bridge mirror| Suricata
-        Rules --> Suricata
-        Suricata -->|append alert event| Eve
-        Eve --> Tail
-    end
-
-    subgraph SF["VirtualBox shared folder<br/>(host path: C:/Projects/soc-triage)"]
-        SE["eve.json mirror"]
-    end
-
-    Tail -->|stdout redirect| SE
-
-    subgraph H["Host machine (Python + Ollama)"]
+    subgraph LAB["Attack Lab — runs inside a virtual machine"]
         direction TB
-        APP["app.py<br/>entry point, wires everything"]
-        LM["log_monitor.py<br/>tails eve.json"]
-        IM["incident_manager.py<br/>grouping + lifecycle"]
-        AG["react_agent.py<br/>Stage 1 classifier"]
-        RG["report_generator.py<br/>Stage 2 narrative + filters"]
-        DB[("SQLite<br/>data/reports.db<br/>WAL mode, 90d retention")]
-        WS["web_server.py<br/>Flask + Socket.IO :5000"]
-        OL["Ollama :11434<br/>qwen2.5:3b (local LLM)"]
+        ATK["Attacker<br/>(simulated bad guy)"]
+        WEB["Vulnerable Web App<br/>(deliberately broken, for practice)"]
+        IDS["Network Sensor<br/>(intrusion detection — watches all traffic)"]
+        LOG["Alert Log<br/>(file the sensor writes each finding to)"]
 
-        APP --> LM
-        APP --> IM
-        APP --> RG
-        APP --> WSV_INIT[" "]
-        APP --> WS
-        SE --> LM
-        LM -->|AlertRecord| IM
-        LM -->|raw alert event| WS
-        IM -->|incident snapshot| RG
-        RG --> AG
-        AG -->|complete prompt| OL
-        OL -.->|response| AG
-        RG -->|complete prompt| OL
-        OL -.->|response| RG
-        RG -->|save report| DB
-        RG -->|report_ready broadcast| WS
-        WS -->|history queries| DB
+        ATK -->|sends attack request| WEB
+        WEB -.->|all traffic seen by| IDS
+        IDS -->|one line per alert| LOG
     end
 
-    Analyst["Analyst browser<br/>dashboard at http://localhost:5000"]
-    WS <-->|WebSocket events + REST| Analyst
+    subgraph BRIDGE["Bridge — a file both sides can read"]
+        SHARE["Shared Folder"]
+    end
 
-    style WSV_INIT fill:transparent,stroke:transparent
+    LOG -->|live-stream new lines| SHARE
+
+    subgraph SYS["Our AI Triage System — runs on the analyst's computer"]
+        direction TB
+        READ["Alert Reader<br/>(watches the shared file for new lines)"]
+        GROUP["Incident Grouper<br/>(combines related alerts from the same attacker)"]
+        CLASS["AI Classifier<br/>(decides if each alert is a real attack or noise)"]
+        REPORT["Incident Reporter<br/>(writes a plain-English summary of the incident)"]
+        BRAIN["Local AI Model<br/>(small open-source language model — no internet needed)"]
+        DB[("Incident Database<br/>(remembers every incident for later)")]
+        DASH["Dashboard Server<br/>(serves the web page)"]
+
+        SHARE --> READ
+        READ -->|one alert at a time| GROUP
+        READ -.->|live feed of every alert| DASH
+        GROUP -->|grouped incident| CLASS
+        CLASS -->|classified alerts| REPORT
+        CLASS <-->|asks AI for verdict| BRAIN
+        REPORT <-->|asks AI for narrative| BRAIN
+        REPORT -->|save report| DB
+        REPORT -.->|notify dashboard| DASH
+        DASH <-->|read history on demand| DB
+    end
+
+    USER["Security Analyst<br/>(opens the dashboard in a web browser)"]
+    DASH <-->|web page + live updates| USER
 ```
 
-**Two machines, one shared folder.** The VM runs the vulnerable app + IDS so
-attack traffic flows over a real network bridge. The host runs Python + Ollama
-because they need more RAM and a model file you do not want on a throw-away VM.
+**The story in one paragraph.** A simulated attacker fires malicious requests
+at a deliberately-broken web app inside a virtual machine. A network sensor
+watches the traffic and writes each suspicious request as a new line in an
+alert log. The triage system on the analyst's computer tails that log, groups
+related alerts from the same attacker into a single "incident", uses a small
+local AI model to decide which alerts are real attacks and which are noise, and
+finally writes a plain-English incident summary that lands on the analyst's
+dashboard.
 
-**Custom rules only.** ET Open and Suricata's built-in protocol-event rules are
-disabled in `suricata.yaml`. Every alert is one of the 71 team-authored rules.
-This keeps the feed scoped to the two attack classes the project demonstrates
-(XSS + SQLi) and makes every alert traceable to a rule the team wrote.
+**Why two machines?** The attack lab is risky software on purpose — a
+deliberately vulnerable web app plus traffic that looks like real attacks. We
+keep it inside a virtual machine so it can't accidentally affect the analyst's
+computer. The triage system runs outside the VM because it needs more memory
+and uses an AI model that we don't want to install inside the throw-away lab.
 
-**The shared folder is the only data path out of the VM.** Suricata streams
-`eve.json` into the folder via `tail -F`; the host's `log_monitor` tails it.
-No network port is exposed from the VM.
+**Why a file as the bridge?** Suricata (the sensor) writes its findings to a
+file. By making that file visible to both machines via a shared folder, the
+triage system can read it without any network connection between the two. No
+open ports, no daemons to manage — just a file that grows over time.
+
+**Why a *local* AI model?** The "Local AI Model" box is a small open-source
+language model running on the analyst's own computer (via a tool called
+Ollama). Local means no data ever leaves the machine, no API costs, no
+internet dependency. The model is small (~3 billion parameters) but more than
+good enough for this task.
+
+**What does the AI actually do?** Two distinct jobs, both shown above:
+1. **Classify each alert** — "Is this a real attack or a false alarm?" The AI
+   Classifier checks history ("has this attacker shown up before?") and
+   environment context ("is this IP one of our own systems?") before deciding.
+2. **Write the incident summary** — once the related alerts are classified,
+   the Incident Reporter asks the AI to weave them into a plain-English story
+   that the analyst can read in seconds.
+
+**Arrow conventions in this diagram.**
+- **Solid arrow** = a normal call or piece of data moving from A to B.
+- **Dashed arrow** = an asynchronous event or a passive observation (e.g. the
+  sensor watches mirrored traffic; the dashboard gets notified after a report
+  saves).
+- **Two-way arrow** = a request followed by a response on the same channel
+  (e.g. the Classifier asks the AI a question and waits for the answer).
 
 ---
 
