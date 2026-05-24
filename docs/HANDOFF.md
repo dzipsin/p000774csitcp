@@ -20,28 +20,35 @@ Suricata IDS alerts from a controlled lab, groups them into incidents,
 runs an agentic ReAct loop with three deterministic enrichment tools,
 classifies each alert (true / likely-false positive + severity), produces
 a structured incident report, and pushes everything to a live dashboard.
-Backed by SQLite for cross-run history. Custom XSS rules from the team
-land in the same pipeline.
+Backed by SQLite for cross-run history. Custom Suricata rules for XSS
+(58 rules, sids 1000001-1000058) and SQLi (13 rules, sids 1000101-1000113)
+authored by the team. The lab runs custom-only — ET Open is disabled.
 
 **What's done.** Phases 1-5, 5.5 (hybrid auto-enrichment), 3.5 (template
-serializer), 10 (SQLite migration), plus custom XSS rules integration
-(task #19). All test suites green: **449 assertions across 9 suites**.
+serializer), 7 (docs polish), 10 (SQLite migration), custom Suricata rules
+for both XSS and SQLi integrated and validated against DVWA, MITRE override
+refined to scan URL payloads, attack_type now resolved by SID range,
+critical/high/low severity scale aligned with custom rule priorities.
+All test suites green: **451 assertions across 9 suites** (MITRE override
+gained 2 new tests for URL-payload bump + preserve-LLM-when-valid).
 
 **What's left.** Phase 6 evaluation campaign (operator runs, ~3 hours
-sequential), Phase 7 docs polish (this file is part of that), Phase 8
-Mac portability, Phase 9 Mac demo dry-run, Phase 17 post-impl design-doc
-cleanup. Detailed list at the bottom.
+sequential), Phase 8 Mac portability, Phase 9 Mac demo dry-run, dead-code
+audit (queued next), Phase 17 design-doc trim (partly done already in the
+latest AGENT_DESIGN.md update). Detailed list at the bottom.
 
-**Two active branches.**
-- `feature/agentic-react-loop` — agentic upgrade, custom XSS rules, Phase
-  6 scaffolding. Demo-ready as-is.
-- `feature/sqlite-persistence` — built on top of agentic. Adds SQLite +
-  query API + retention sweeper. Also demo-ready. This is the most-up-to-
-  date branch.
+**One active branch.** `feature/sqlite-persistence` carries everything —
+agentic ReAct loop, hybrid auto-enrichment, template serializer, SQLite
+persistence, custom XSS + SQLi rules, severity rework, MITRE refinement,
+documentation rewrites. Demo-ready. `feature/agentic-react-loop` still
+exists for historical reference but is superseded.
 
 **Operator preferences captured in memory.**
-- Never add `Co-Authored-By` trailers to commits. Project is a capstone;
-  attribution to AI affects academic integrity framing.
+- Never add `Co-Authored-By` (or any AI attribution) trailers to commits.
+  Capstone academic integrity framing.
+- When integrating a teammate's commit, cherry-pick to preserve their
+  authorship; do any cleanup (rename / renumber / bug fix) in a separate
+  follow-up commit under your own authorship.
 
 ---
 
@@ -53,12 +60,12 @@ cleanup. Detailed list at the bottom.
 │                                      │     │                                      │
 │  ┌──────────────┐ ┌────────────────┐ │     │ ┌──────────┐ ┌────────────────────┐  │
 │  │  DVWA        │ │  Suricata IDS  │ │     │ │  Ollama  │ │ AI Triage App      │  │
-│  │  (Docker)    │─▶│ + ET Open      │ │     │ │  :11434  │◀│ src/app.py         │  │
-│  │  Port 8080   │ │ + custom XSS   │ │     │ │ qwen2.5:3b│ │ :5000              │  │
-│  │              │ │ rules (lab/    │ │     │ └──────────┘ │  - LogMonitor       │  │
-│  │              │ │ suricata/      │ │     │              │  - IncidentManager  │  │
-│  │              │ │ xss_alerts.    │ │     │              │  - ReActAgent       │  │
-│  │              │ │ rules)         │ │     │              │  - ReportGenerator  │  │
+│  │  (Docker)    │─▶│ custom-only:   │ │     │ │  :11434  │◀│ src/app.py         │  │
+│  │  Port 8080   │ │  xss_alerts +  │ │     │ │ qwen2.5:3b│ │ :5000              │  │
+│  │              │ │  sqli_alerts   │ │     │ └──────────┘ │  - LogMonitor       │  │
+│  │              │ │  (lab/         │ │     │              │  - IncidentManager  │  │
+│  │              │ │  suricata/)    │ │     │              │  - ReActAgent       │  │
+│  │              │ │  ET Open OFF   │ │     │              │  - ReportGenerator  │  │
 │  └──────────────┘ └────────────────┘ │     │              │  - ReportDatabase   │  │
 │                          │           │     │              │    (SQLite)         │  │
 │                          ▼           │     │              │  - Flask + SocketIO │  │
@@ -79,7 +86,8 @@ cleanup. Detailed list at the bottom.
 
 1. Attacker (host browser or curl) fires HTTP attack at DVWA running in the VM
 2. Suricata sees the packet on the Docker bridge, fires matching rules
-   (ET Open + custom XSS rules), writes alert lines to `eve.json`
+   (custom XSS + SQLi only; ET Open and built-in protocol-event rules
+   are disabled), writes alert lines to `eve.json`
 3. `tail -F` running in the VM mirrors `eve.json` to a VirtualBox shared
    folder; host reads it
 4. `LogMonitor` (on host) tails the host-side `eve.json`, parses each
@@ -98,39 +106,44 @@ cleanup. Detailed list at the bottom.
 
 ## Branch state
 
-Both branches are pushed to `origin`. Tests pass on both.
+`feature/sqlite-persistence` is the canonical work-in-progress branch. It
+carries everything done so far. Other branches are historical.
 
-### `feature/agentic-react-loop`
+### `feature/sqlite-persistence` (active)
 
-Built on top of `feature/ai-triage-module` (older starting state).
-Contains:
-- ReAct agent core + 3 tools + 14 commits of agentic work
-- Custom XSS Suricata rules cherry-picked from teammate's `suricata-rules`
-  branch into `lab/suricata/xss_alerts.rules`
-- Phase 6 evaluation scaffolding (`run_combined_report.py`, `--config-dim`
-  flag, runbook)
-- Single-shot fallback fix (rule-based + filter work in any mode)
+Built on top of `feature/agentic-react-loop`, then continued. Contains:
+- ReAct agent core + 3 tools + the full Phase 1-5 work
+- Phase 5.5 hybrid auto-enrichment (Option F, default on)
+- Phase 3.5 template-v1 serializer + JSONSchema validation
+- Phase 10 SQLite migration: `ReportDatabase` (drop-in for `ReportStorage`),
+  `[storage]` config section, `/api/incidents/*` history endpoints,
+  retention sweeper, hybrid indexed-columns-plus-JSON-blob schema, WAL mode
+- Custom Suricata rules integrated into `lab/suricata/`:
+  - `xss_alerts.rules` (58 rules, sids 1000001-1000058, author Shaina)
+  - `sqli_alerts.rules` (13 rules, sids 1000101-1000113, author Sahil)
+  - Both cherry-picked from `suricata-rules` branch to preserve authorship,
+    then cleaned up (rename, renumber, Suricata 8 sticky-buffer fixes,
+    `[\s+]` for URL-encoded `+` spaces) in follow-up commits
+  - `lab/suricata/README.md` covers custom-only deployment + validation
+- Severity scale reworked to critical/high/low (no medium) to match the
+  custom rules' P1/P2/P3 priority tiers
+- `attack_type` resolved deterministically from custom SID ranges
+  (override for qwen 3B's "Other / unclassified" hedge)
+- MITRE override refined: scans signature **and** URL for credential
+  keywords, preserves the LLM's tactic when already valid
+- Documentation: `docs/ARCHITECTURE.md` with hand-drawn diagram + human
+  walkthrough, `docs/AGENT_DESIGN.md` updated to reflect implementation
+  reality, `docs/PHASE_6_RUNBOOK.md`, `docs/PHASE_10_SQLITE.md`,
+  README + this HANDOFF refresh
 
-Latest commit on this branch: `4fa7e68 fix: rule-based suggestions + LLM
-filter work in single_shot mode`.
+Use this branch for demoing and for any further development. Merge to
+`main` when the capstone submission is ready (it carries everything).
 
-### `feature/sqlite-persistence`
+### `feature/agentic-react-loop` (historical)
 
-Branched from `feature/agentic-react-loop`. Adds:
-- `src/report_db.py` (`ReportDatabase` SQLite class, drop-in replacement
-  for `ReportStorage`)
-- `data/reports.db` (gitignored — local-machine state)
-- `[storage]` section in `app.config` (backend toggle, retention)
-- New HTTP endpoints under `/api/incidents/` for history queries
-- Retention sweeper thread
-- Single-shot fix merged in via merge commit `f89f497`
-
-Latest commit: `f89f497 Merge branch 'feature/agentic-react-loop' into
-feature/sqlite-persistence`.
-
-**This is the canonical work-in-progress branch.** Use this when
-demoing or developing further. Merge to `main` when ready for the
-capstone submission.
+The earlier snapshot. Useful only for reading the original ReAct work in
+isolation. Do not develop on it any more; `feature/sqlite-persistence`
+already includes everything here via merge commit `f89f497`.
 
 ---
 
@@ -149,8 +162,9 @@ p000774csitcp/
 │   └── HANDOFF.md                   # THIS FILE
 ├── lab/
 │   └── suricata/
-│       ├── README.md                # deployment + validation for custom XSS rules
-│       └── xss_alerts.rules         # 58 rules across P1/P2/P3 priorities
+│       ├── README.md                # custom-only deployment + validation for both rulesets
+│       ├── xss_alerts.rules         # 58 rules, sids 1000001-1000058, P1/P2/P3
+│       └── sqli_alerts.rules        # 13 rules, sids 1000101-1000113, P1/P2/P3
 └── src/
     ├── app.py                       # entrypoint — wires everything
     ├── log_monitor.py               # tails eve.json, emits AlertRecord
@@ -430,11 +444,19 @@ Stage 2's `ai_suggestions` field goes through three layers:
 ### MITRE override
 
 After Stage 2 returns an `overall_attack_stage`, a rule-based override
-kicks in. qwen2.5:3b sometimes labels SQLi/XSS as "Reconnaissance" or
+runs. qwen2.5:3b sometimes labels SQLi/XSS as "Reconnaissance" or
 "Execution"; the override maps attack types to canonical tactics
-(SQLi targeting credentials → Credential Access, XSS → Initial Access,
-CommandInjection → Execution, etc.). Honest engineering: rule-based for
-what we KNOW, LLM judgment for everything else.
+(SQLi → Initial Access by default, bumped to Credential Access if the
+signature or URL names credential keywords like `user` / `password` /
+`token`; XSS → Initial Access; CommandInjection → Execution, etc.).
+
+Refinement: the override **preserves the LLM's tactic when it is already
+in the candidate set**. So if qwen correctly picks "Credential Access"
+for a credential-extraction SQLi, it stays. The override only fires when
+the LLM picked something invalid. URL scanning catches the case where
+custom rule msgs are generic ("P1 - SQLi UNION SELECT in URI") but the
+URL payload (`?id=1' UNION SELECT user, password FROM users#`) clearly
+names credentials.
 
 ### Template-v1 serializer
 
@@ -454,14 +476,32 @@ WebSocket push all emit this shape.
 Hybrid schema: indexed columns + JSON blob. WAL mode + thread-local
 connections. See `docs/PHASE_10_SQLITE.md` for the full design.
 
-### Custom XSS rules
+### Custom Suricata rules (XSS + SQLi)
 
-58 rules from teammate (KAUR97) in `lab/suricata/xss_alerts.rules`.
-P1 catches confirmed exploit chains (`document.cookie` + exfiltration
-vector), P2 catches encoded tag injection, P3 catches generic JS sinks.
-SIDs in user range 1000001-1000058 (renumbered from teammate's original
-2000001-2000058 which clashed with ET Open). Deployment + validation
-procedure in `lab/suricata/README.md`.
+Two rule files in `lab/suricata/`, both authored by teammates and
+integrated into the pipeline via cherry-pick:
+
+- **`xss_alerts.rules`** (Shaina, KAUR97) — 58 rules, sids 1000001-1000058.
+  P1 catches confirmed exploit chains (`document.cookie` + exfiltration
+  vector), P2 catches encoded tag injection, P3 catches generic JS sinks.
+  Originally on sids 2000001-2000058 which clashed with ET Open; renumbered
+  into the user range during integration.
+
+- **`sqli_alerts.rules`** (Sahil, Sahil-Tho) — 13 rules, sids 1000101-1000113.
+  P1: UNION SELECT, DB function calls, OS-command primitives. P2:
+  boolean-blind, time-blind, comment sequences, information_schema
+  enumeration. P3: SQL keyword + quote, URL-encoded chars, header payload.
+  Originally on sids 1000001-1000013 which clashed with the XSS rules
+  (and shipped a `TEST ALERT` rule that fired on every HTTP packet);
+  renumbered, TEST ALERT removed, and the POST-body / header rules fixed
+  for Suricata 8's sticky-buffer parser.
+
+The lab runs **custom-only**: `suricata.yaml` `rule-files:` lists only the
+two files above. ET Open and Suricata's built-in protocol-event rules are
+disabled. This keeps the alert feed scoped to the two attack classes the
+project demonstrates and makes every alert traceable to a rule the team
+wrote. Full deployment + per-tier validation procedure in
+`lab/suricata/README.md`.
 
 ---
 
@@ -486,6 +526,13 @@ procedure in `lab/suricata/README.md`.
 | 15 | `HOME_NET = any` kept (broken-by-design) | Fixing properly would change which alerts fire and break eval comparability |
 | 16 | Phase 6 staircase: 5 configs × 3 reps | Each row isolates one design-decision contribution to F1; complete story for capstone report |
 | 17 | No AI commit trailers | Academic integrity framing — operator preference saved to memory |
+| 18 | Suricata lab runs custom-only (ET Open + built-in event rules disabled) | Scopes alert feed to the two attack classes the project demonstrates; every alert traceable to a team-written rule; removes ET double-alerting + ET SCAN / SURICATA noise |
+| 19 | `attack_type` resolved from custom SID ranges before string fallback (1000001-58 → XSS, 1000101-13 → SQLi) | qwen 3B sometimes hedges `attack_type` to "Other / unclassified" on broad-tier alerts; SID-range path is correctness-first, string fallback still handles ET Open if re-enabled |
+| 20 | MITRE override scans signature **and** URL for credentials, preserves LLM tactic when valid | Custom rule msgs are generic so credential intent lives in the URL; preserve-LLM avoids stomping qwen's correct verdict |
+| 21 | Alert severity scale = critical / high / low (no medium) | Aligns with custom rules' P1/P2/P3 priority tiers; Suricata severity 3+ maps to "low" |
+| 22 | SQLi rule pcres use `[\s+]` not `\s` for inter-keyword spacing | DVWA's GET form encodes spaces as `+` which Suricata's URI buffer does not decode; bare `\s` made the P1 UNION SELECT rule silently fail to fire |
+| 23 | Teammate contributions integrated via cherry-pick (authorship preserved); cleanup in a separate commit | Capstone academic integrity, same motivation as decision 17; saved as memory `feedback_teammate_authorship.md` |
+| 24 | Stripped Mermaid sub-diagrams from `docs/ARCHITECTURE.md`, kept only the hand-drawn system overview | Hand-drawn is the canonical visual reference; redundant Mermaid versions were stale and risked drift |
 
 ---
 
@@ -495,8 +542,9 @@ These live in `C:/Users/Ahruxu/.claude/projects/C--Projects-soc-triage-p000774cs
 
 | Memory | What it captures |
 |---|---|
-| `feedback_commit_trailers.md` | Never add `Co-Authored-By` trailers to commits on this repo |
-| `project_custom_xss_rules.md` | Teammates' XSS rules — was pending, now delivered + integrated |
+| `feedback_commit_trailers.md` | Never add `Co-Authored-By` (or any AI attribution) trailers to commits on this repo |
+| `feedback_teammate_authorship.md` | Integrate teammate contributions via cherry-pick so their git authorship is preserved; do cleanup as a separate follow-up commit |
+| `project_custom_xss_rules.md` | Custom Suricata rules now integrated (XSS + SQLi); lab runs custom-only with ET Open disabled. File name kept for stability; content covers both rulesets |
 
 A fresh session should automatically pick these up.
 
@@ -557,17 +605,16 @@ In priority order:
    split across days. Output: `eval_results/p6_combined_report.md` with
    ΔF1 column per design decision.
 
-2. **README refresh** — the existing `README.md` was written before the
-   agentic upgrade. Needs to mention:
-   - ReAct mode + `[agent]` config
-   - SQLite backend + `[storage]` config
-   - Custom XSS rules in `lab/suricata/`
-   - The 9-suite test layout
-   - This handoff doc as the orientation point
+2. **Dead-code audit** — produce a deletion-candidate list (legacy
+   `ai_module.py`, legacy `storage.py` JSON backend, unused
+   `model_provider.py` Anthropic / llama.cpp branches if only Ollama
+   runs, any leftover prints / stale TODOs) before deleting anything.
+   Operator wants a reviewable list first.
 
-3. **`docs/ARCHITECTURE.md`** — was mentioned in earlier HANDOFF but never
-   created. Could be a slimmer companion to `AGENT_DESIGN.md` focused on
-   the operational/runtime view rather than the design rationale.
+3. **Docstring + WHY-comment audit** — module-level docstrings on public
+   classes / functions so the code can be picked up cold by next year's
+   batch. Default to *no* line-by-line comments; only add a comment when
+   the WHY is non-obvious.
 
 ### Medium priority (demo robustness)
 
@@ -648,7 +695,9 @@ merge of `feature/sqlite-persistence → main` brings the whole thing in.
 | No alerts in dashboard Raw Alerts tab | `eve.json` bridge died inside VM | re-run `nohup tail -F /var/log/suricata/eve.json > /media/sf_soc-triage/eve.json &` |
 | Alerts visible but incidents stuck "open" forever | `IncidentManager` window hasn't expired | Wait `time_window_minutes` (default 2 min) OR click Force Regenerate |
 | Suricata startup says `Loading signatures failed` | Pre-existing ET Open rules with `!$HOME_NET` (HOME_NET is `any`). Cosmetic. | Confirm with `sudo grep "rules loaded" /var/log/suricata/suricata.log` — should show ~49600 rules loaded despite the error line |
-| Custom XSS rule SIDs not firing | File in wrong path | Must be `/var/lib/suricata/rules/xss_alerts.rules`, not `/etc/suricata/rules/` |
+| Custom rule SIDs not firing | File in wrong path | Both `xss_alerts.rules` and `sqli_alerts.rules` must live in `/var/lib/suricata/rules/`, not `/etc/suricata/rules/` |
+| Suricata 8 rejects SQLi POST-body / header rules on `-T` | Old draft used wrong sticky-buffer order | Already fixed on `feature/sqlite-persistence` (commit `3023b68`). Re-copy `sqli_alerts.rules` from `lab/suricata/` into the VM, re-run `suricata -T`, restart |
+| Critical-tier alerts never appear despite a clear UNION SELECT payload | DVWA encodes spaces as `+`; pcre `\s+` does not match | Already fixed on `feature/sqlite-persistence` (commit `0fff4c6`, rules now use `[\s+]`). Same redeploy steps as above |
 | Dashboard always shows FP=0 | Older JS cached | Hard-refresh (Ctrl+Shift+R). Fix was committed `7f42d3c` |
 | Stage 2 picks wrong MITRE tactic | LLM adherence drift | MITRE override handles common cases; check console log for `Stage 2 MITRE tactic overridden:` line |
 | LLM emits "let me check ..." after enrichment data is already in the prompt | Stylistic prompt adherence | Tightened in `2ff1a1d`. If still happens occasionally, accept — it's qwen2.5:3b's ceiling |
@@ -691,12 +740,13 @@ After that, ask the operator (or your own judgment):
 | `docs/AGENT_DESIGN.md` | Full design rationale for the agentic ReAct loop. Read on Phase 17 cleanup or when explaining the agent to a marker. |
 | `docs/PHASE_6_RUNBOOK.md` | Operator procedure for the evaluation campaign — exact commands per config, troubleshooting, interpretation. |
 | `docs/PHASE_10_SQLITE.md` | SQLite migration design + operations — schema, concurrency, retention, roll-back to JSON. |
-| `lab/suricata/README.md` | Deployment + hand-test plan for custom XSS rules. |
+| `lab/suricata/README.md` | Custom-only deployment + per-tier hand-test plan for both XSS and SQLi rulesets. |
+| `docs/ARCHITECTURE.md` | Hand-drawn system overview diagram + walkthrough of every component and arrow. Read this first if you prefer visuals. |
 | `Incident Report Template v1.pdf` | The template the marker expects the JSON to conform to. |
-| `README.md` | Original setup (predates this work — needs the Phase 7 refresh). |
+| `README.md` | First-day setup: VirtualBox + Kali + DVWA + Suricata + Ollama + Python venv. Refreshed for the agentic + SQLite + custom-rules current state. |
 
 ---
 
 *This handoff doc is the canonical orientation for the project as of
-2026-05-20. Update it whenever a major milestone lands or a key
+2026-05-25. Update it whenever a major milestone lands or a key
 decision changes.*
