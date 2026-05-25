@@ -24,13 +24,19 @@ Backed by SQLite for cross-run history. Custom Suricata rules for XSS
 (58 rules, sids 1000001-1000058) and SQLi (13 rules, sids 1000101-1000113)
 authored by the team. The lab runs custom-only — ET Open is disabled.
 
-**What's done.** Phases 1-5, 5.5 (hybrid auto-enrichment), 3.5 (template
-serializer), 7 (docs polish), 10 (SQLite migration), custom Suricata rules
-for both XSS and SQLi integrated and validated against DVWA, MITRE override
-refined to scan URL payloads, attack_type now resolved by SID range,
-critical/high/low severity scale aligned with custom rule priorities.
-All test suites green: **451 assertions across 9 suites** (MITRE override
-gained 2 new tests for URL-payload bump + preserve-LLM-when-valid).
+**What you have working right now.** Two-stage AI pipeline (ReAct agent
+for Stage 1 + LLM narrative for Stage 2), hybrid auto-enrichment that
+deterministically pre-runs the three tools before the LLM sees an alert,
+template-v1 JSON serializer with JSONSchema validation, SQLite
+persistence with history-query endpoints + retention sweeper, custom
+Suricata XSS + SQLi rule files integrated and validated against DVWA,
+MITRE tactic override that scans signature and URL for credential
+keywords (and preserves the LLM's tactic when valid), `attack_type`
+resolved by custom SID range with substring fallback, alert severity
+on a critical / high / low scale matched to the custom rules' P1 / P2
+/ P3 priority tiers, dashboard with live raw alerts + incident cards +
+expandable per-analysis reasoning trace. All test suites pass: **451
+assertions across 9 suites**.
 
 **What's left.** Phase 6 evaluation campaign (operator runs, ~3 hours
 sequential), Phase 8 Mac portability, Phase 9 Mac demo dry-run, dead-code
@@ -111,39 +117,40 @@ carries everything done so far. Other branches are historical.
 
 ### `feature/sqlite-persistence` (active)
 
-Built on top of `feature/agentic-react-loop`, then continued. Contains:
-- ReAct agent core + 3 tools + the full Phase 1-5 work
-- Phase 5.5 hybrid auto-enrichment (Option F, default on)
-- Phase 3.5 template-v1 serializer + JSONSchema validation
-- Phase 10 SQLite migration: `ReportDatabase` (drop-in for `ReportStorage`),
+This branch carries everything you need to run the demo. Contains:
+- ReAct agent core + 3 tools (`get_alert_history`,
+  `lookup_environment_context`, `get_attack_pattern_stats`)
+- Hybrid auto-enrichment (Option F, default on)
+- Template-v1 serializer + JSONSchema validation
+- SQLite persistence: `ReportDatabase` (drop-in for `ReportStorage`),
   `[storage]` config section, `/api/incidents/*` history endpoints,
-  retention sweeper, hybrid indexed-columns-plus-JSON-blob schema, WAL mode
-- Custom Suricata rules integrated into `lab/suricata/`:
+  retention sweeper, hybrid indexed-columns + JSON-blob schema, WAL mode
+- Custom Suricata rules in `lab/suricata/`:
   - `xss_alerts.rules` (58 rules, sids 1000001-1000058, author Shaina)
   - `sqli_alerts.rules` (13 rules, sids 1000101-1000113, author Sahil)
-  - Both cherry-picked from `suricata-rules` branch to preserve authorship,
-    then cleaned up (rename, renumber, Suricata 8 sticky-buffer fixes,
-    `[\s+]` for URL-encoded `+` spaces) in follow-up commits
   - `lab/suricata/README.md` covers custom-only deployment + validation
-- Severity scale reworked to critical/high/low (no medium) to match the
-  custom rules' P1/P2/P3 priority tiers
-- `attack_type` resolved deterministically from custom SID ranges
-  (override for qwen 3B's "Other / unclassified" hedge)
-- MITRE override refined: scans signature **and** URL for credential
-  keywords, preserves the LLM's tactic when already valid
-- Documentation: `docs/ARCHITECTURE.md` with hand-drawn diagram + human
-  walkthrough, `docs/AGENT_DESIGN.md` updated to reflect implementation
-  reality, `docs/PHASE_6_RUNBOOK.md`, `docs/PHASE_10_SQLITE.md`,
-  README + this HANDOFF refresh
+- Alert severity scale: critical / high / low. Aligns with the custom
+  rules' P1 / P2 / P3 priority tiers (no medium tier in the dashboard)
+- `attack_type` resolved deterministically from the custom SID range
+  (`1000001-1000058` → XSS, `1000101-1000113` → SQLi); string-matching
+  on the signature msg is the fallback for ET Open / unknown SIDs
+- MITRE tactic override that scans the signature **and** the URL for
+  credential keywords, and preserves the LLM's tactic when it is
+  already valid
+- Documentation set: `docs/ARCHITECTURE.md` (hand-drawn workflow
+  diagram + walkthrough), `docs/AGENT_DESIGN.md` (deep dive on the
+  agent), `docs/PHASE_6_RUNBOOK.md`, `docs/PHASE_10_SQLITE.md`,
+  `README.md`, and this file
 
 Use this branch for demoing and for any further development. Merge to
 `main` when the capstone submission is ready (it carries everything).
 
 ### `feature/agentic-react-loop` (historical)
 
-The earlier snapshot. Useful only for reading the original ReAct work in
-isolation. Do not develop on it any more; `feature/sqlite-persistence`
-already includes everything here via merge commit `f89f497`.
+Earlier snapshot of the agent work without the SQLite layer. Kept
+around so the original ReAct-only state is recoverable; do not
+develop on it. `feature/sqlite-persistence` already includes
+everything here via merge commit `f89f497`.
 
 ---
 
@@ -478,29 +485,24 @@ connections. See `docs/PHASE_10_SQLITE.md` for the full design.
 
 ### Custom Suricata rules (XSS + SQLi)
 
-Two rule files in `lab/suricata/`, both authored by teammates and
-integrated into the pipeline via cherry-pick:
+Two rule files live in `lab/suricata/`, both team-authored:
 
-- **`xss_alerts.rules`** (Shaina, KAUR97) — 58 rules, sids 1000001-1000058.
-  P1 catches confirmed exploit chains (`document.cookie` + exfiltration
-  vector), P2 catches encoded tag injection, P3 catches generic JS sinks.
-  Originally on sids 2000001-2000058 which clashed with ET Open; renumbered
-  into the user range during integration.
+- **`xss_alerts.rules`** (Shaina, `KAUR97`) — 58 rules, sids
+  1000001-1000058. P1 catches confirmed exploit chains
+  (`document.cookie` + exfiltration vector), P2 catches encoded tag
+  injection, P3 catches generic JS sinks.
 
-- **`sqli_alerts.rules`** (Sahil, Sahil-Tho) — 13 rules, sids 1000101-1000113.
-  P1: UNION SELECT, DB function calls, OS-command primitives. P2:
-  boolean-blind, time-blind, comment sequences, information_schema
-  enumeration. P3: SQL keyword + quote, URL-encoded chars, header payload.
-  Originally on sids 1000001-1000013 which clashed with the XSS rules
-  (and shipped a `TEST ALERT` rule that fired on every HTTP packet);
-  renumbered, TEST ALERT removed, and the POST-body / header rules fixed
-  for Suricata 8's sticky-buffer parser.
+- **`sqli_alerts.rules`** (Sahil, `Sahil-Tho`) — 13 rules, sids
+  1000101-1000113. P1: UNION SELECT, DB function calls, OS-command
+  primitives. P2: boolean-blind, time-blind, comment sequences,
+  `information_schema` enumeration. P3: SQL keyword + quote,
+  URL-encoded chars, header payload.
 
-The lab runs **custom-only**: `suricata.yaml` `rule-files:` lists only the
-two files above. ET Open and Suricata's built-in protocol-event rules are
-disabled. This keeps the alert feed scoped to the two attack classes the
-project demonstrates and makes every alert traceable to a rule the team
-wrote. Full deployment + per-tier validation procedure in
+The lab runs **custom-only**: `suricata.yaml` `rule-files:` lists only
+the two files above. ET Open and Suricata's built-in protocol-event
+rules are disabled. This scopes the alert feed to the two attack
+classes the project demonstrates and makes every alert traceable to a
+rule the team wrote. Full deployment + per-tier validation procedure in
 `lab/suricata/README.md`.
 
 ---
