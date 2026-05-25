@@ -205,7 +205,14 @@ class ToolResult:
 
 ## 5. Tool catalog
 
-Three tools. All read-only, in-process, synchronous. No external API calls. Total per-call latency target: <100ms.
+Three tools. All read-only, in-process, synchronous. No external API
+calls. Total per-call latency target: <100 ms.
+
+> **Source-of-truth note.** Tool descriptions, JSON Schemas, and return
+> shapes below capture the design intent. The exact strings used at
+> runtime live in `src/agent_tools.py` (`_ALERT_HISTORY_DESCRIPTION`,
+> `_ENV_LOOKUP_SCHEMA`, etc.) and may have been slightly reworded as
+> the prompts were tuned. When in doubt, the code is canonical.
 
 ### 5.1 `get_alert_history`
 
@@ -237,9 +244,11 @@ Three tools. All read-only, in-process, synchronous. No external API calls. Tota
 ```
 
 **Data sources:**
-- `IncidentManager._open_incidents` — current open incidents this session
-- `IncidentManager._recently_closed` — closed in this session, still in memory
-- `ReportStorage.list_reports()` — persisted reports on disk from prior sessions
+- `IncidentManager._open_incidents` — current open incidents this session.
+- `IncidentManager._recently_closed` — closed in this session, still in memory.
+- The active storage backend's `list_reports()` — `ReportDatabase` (SQLite,
+  default since Phase 10) or `ReportStorage` (legacy JSON files) — for
+  persisted reports from prior sessions.
 
 **Return shape:**
 ```json
@@ -326,7 +335,11 @@ classification_hint = "untrusted_source_likely_attacker"
 }
 ```
 
-Migration note: when `include_lab_context = true` in legacy single-shot mode, the prompt still uses the existing hardcoded block. The new structured environment map runs in parallel during ReAct mode. After ReAct adoption, the legacy hardcoded block in `report_generator.py` can be removed.
+Migration note (kept for history): the original Stage 1 single-shot path
+injected a hardcoded `include_lab_context` block into the prompt. The
+structured environment map ran in parallel during ReAct mode while both
+paths coexisted. ReAct + auto-enrichment is now the default, so the
+hardcoded block is no longer a primary code path.
 
 ### 5.3 `get_attack_pattern_stats`
 
@@ -358,7 +371,10 @@ Migration note: when `include_lab_context = true` in legacy single-shot mode, th
 }
 ```
 
-**Data source:** Aggregate over `IncidentManager._open_incidents`, `_recently_closed`, and `ReportStorage.list_reports()`.
+**Data source:** Aggregate over `IncidentManager._open_incidents`,
+`_recently_closed`, and the active storage backend's `list_reports()`
+(`ReportDatabase` by default, `ReportStorage` when running the legacy
+JSON backend).
 
 **Return shape:**
 ```json
@@ -468,39 +484,21 @@ Stage 1 system prompt prompt-injection defense block is retained in part 1.
 
 ### 6.6 Few-shot examples
 
-Three examples embedded in the system prompt cover:
+The system prompt ships a small number of worked examples covering the
+three common paths through the loop:
 
-1. **Obvious attack, no tools needed** — clear SQLi URL pattern → direct final answer.
-2. **Ambiguous alert, one tool needed** — alert from unknown IP → look up environment context → final answer.
-3. **Repeat offender, two tools needed** — alert with attack type pattern → check history + check pattern stats → severity bumped to High → block recommendation.
+1. Obvious attack, no tools needed: clear SQLi URL pattern, straight to
+   `<final_answer>`.
+2. Ambiguous alert, one tool needed: alert from an unknown IP, look up
+   environment context, then `<final_answer>`.
+3. Sustained activity, more than one tool needed: check history and
+   pattern stats, raise severity, then `<final_answer>`.
 
-Worked example 1 (verbatim text in the prompt):
-
-```
-EXAMPLE 1 — Obvious attack, no tools needed.
-
-User alert:
-{
-  "signature": "ET WEB_SERVER SELECT USER SQL Injection Attempt in URI",
-  "http_url": "/vulnerabilities/sqli/?id=1%27%20UNION%20SELECT%20user%2Cpassword%20FROM%20users%23&Submit=Submit",
-  "src_ip": "192.168.56.1",
-  "dst_ip": "172.18.0.3"
-}
-
-Your response:
-<thought>The URL contains a clear UNION SELECT SQL injection payload targeting the users table. No additional context needed — this is unambiguously a true positive SQLi attempt.</thought>
-<final_answer>
-{
-  "classification": "true_positive",
-  "severity": "High",
-  "summary": "UNION-based SQL injection attempting to extract user credentials",
-  "recommendation": "block_source_ip",
-  "reasoning": "URL payload contains 'UNION SELECT user, password FROM users' — explicit credential exfiltration attempt. High severity due to confirmed data extraction intent."
-}
-</final_answer>
-```
-
-Examples 2 and 3 follow the same pattern. Full text in the implementation.
+The exact wording of each example has been tuned during prompt iteration
+(qwen 3B is sensitive to format drift). See `_SYSTEM_PROMPT` in
+`src/react_agent.py` for the verbatim text used at runtime — that file is
+the source of truth and embedding the prompt here would rot the moment
+the next prompt tweak lands.
 
 ### 6.7 Tool over-use prevention
 
@@ -631,70 +629,32 @@ Match types supported: `exact_ip`, `cidr`, `url_prefix`, `url_contains`. Each im
 
 ## 9. ReportGenerator integration
 
-The only modification to `report_generator.py`:
+The agent is plugged into `ReportGenerator` via two optional constructor
+kwargs (`react_agent`, `agent_mode`). When `agent_mode == "react"` the
+per-alert classifier delegates to `react_agent.classify(alert)`; otherwise
+it falls through to the original single-shot path. Existing callers that
+do not pass the new kwargs keep getting single-shot behaviour, so all
+prior tests stayed green during the migration.
 
-```python
-class ReportGenerator:
-    def __init__(self, ..., react_agent: Optional[ReActAgent] = None,
-                       agent_mode: str = "single_shot"):
-        ...
-        self._react_agent = react_agent
-        self._agent_mode = agent_mode
+The `app.py` startup is where the wiring happens: read the `[agent]`
+section of `app.config`, build a `ToolRegistry`, register each enabled
+tool via its factory in `agent_tools.py` (passing the live
+`incident_manager` and `storage` so the tools can query real state),
+construct a `ReActAgent` with the provider + registry + timeouts, and
+hand it into `ReportGenerator`.
 
-    def _classify_single(self, alert: AlertRecord) -> AlertClassification:
-        if self._agent_mode == "react" and self._react_agent is not None:
-            return self._react_agent.classify(alert)
-        return self._classify_single_singleshot(alert)  # renamed existing impl
+The exact constructor signatures and the wire-up flow have been refined
+through normal refactoring. See:
 
-    def _classify_single_singleshot(self, alert: AlertRecord) -> AlertClassification:
-        # ... existing implementation, unchanged ...
-```
+- `src/report_generator.py` — `ReportGenerator.__init__` and
+  `_classify_single` for the delegation logic.
+- `src/app.py` — startup wiring: tool registration, ReActAgent
+  construction, ReportGenerator instantiation, storage backend selection
+  (`ReportDatabase` for SQLite, `ReportStorage` for JSON).
+- `src/tool_registry.py` — `ToolRegistry.register()` semantics.
 
-`app.py` wires the agent:
-
-```python
-# In app.py (sketch)
-from react_agent import ReActAgent
-from tool_registry import ToolRegistry
-from agent_tools import (
-    make_alert_history_tool,
-    make_environment_lookup_tool,
-    make_pattern_stats_tool,
-)
-
-agent_cfg = config["agent"]
-
-if agent_cfg["mode"] == "react":
-    registry = ToolRegistry()
-    if agent_cfg["tools"]["get_alert_history"]:
-        registry.register(make_alert_history_tool(incident_manager, storage))
-    if agent_cfg["tools"]["lookup_environment_context"]:
-        registry.register(make_environment_lookup_tool(agent_cfg["environment"]))
-    if agent_cfg["tools"]["get_attack_pattern_stats"]:
-        registry.register(make_pattern_stats_tool(incident_manager, storage))
-
-    react_agent = ReActAgent(
-        provider=provider,
-        tools=registry,
-        max_iterations=agent_cfg["max_iterations"],
-        tool_timeout_seconds=agent_cfg["tool_timeout_seconds"],
-        total_budget_seconds=agent_cfg["total_budget_seconds"],
-    )
-    report_generator = ReportGenerator(
-        provider=provider,
-        storage=storage,
-        ...,
-        react_agent=react_agent,
-        agent_mode="react",
-    )
-else:
-    report_generator = ReportGenerator(
-        provider=provider,
-        storage=storage,
-        ...,
-        agent_mode="single_shot",
-    )
-```
+Trying to keep a verbatim copy of the constructor signature in this doc
+would rot every refactor; the source files above are canonical.
 
 ---
 
