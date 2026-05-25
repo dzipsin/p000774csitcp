@@ -101,7 +101,10 @@ sudo suricata -T -c /etc/suricata/suricata.yaml
 sudo systemctl reload suricata || sudo systemctl restart suricata
 
 # 6. Verify the expected rule count loaded (71 = 58 XSS + 13 SQLi)
-sudo grep "rules loaded" /var/log/suricata/suricata.log | tail -1
+sudo grep -iE "rule files processed|successfully loaded" /var/log/suricata/suricata.log | tail -3
+# Expect a line like:
+#   <Notice> - 1 rule files processed. 71 rules successfully loaded, 0 rules failed
+# (Plain "rules loaded" does not match Suricata 8's wording.)
 ```
 
 ## Signature ID conflict check
