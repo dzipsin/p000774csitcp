@@ -68,7 +68,7 @@ class AlertClassification:
     alert_id: str                    # derived from flow_id or UUID
     timestamp: str                   # original alert timestamp_raw
     classification: str              # "true_positive" | "likely_false_positive"
-    severity: str                    # "Low" | "Medium" | "High"
+    severity: str                    # "critical" | "high" | "low" (matches Suricata P1/P2/P3 tiers)
     summary: str                     # one-line description
     recommendation: str              # "block_source_ip" | "escalate_tier2" | "continue_monitoring"
     reasoning: str                   # LLM's explanation
@@ -214,7 +214,7 @@ class IncidentSummary:
     total_alerts: int
     classification_counts: Dict[str, int]   # {"true_positive": N, "likely_false_positive": N, "error": N}
     detected_attacks: List[str]             # ["SQLi", "XSS", ...]
-    overall_severity: str                   # "Low" | "Medium" | "High"
+    overall_severity: str                   # "critical" | "high" | "low" (matches Suricata P1/P2/P3 tiers)
     overall_cvss_estimate: float            # 0.0 - 10.0, rule-based
     repeat_offender: bool                   # IP seen in prior incidents this session
 
@@ -233,7 +233,7 @@ class AlertAnalysis:
     # can read per-alert TP/FP labels without having to re-derive them.
     # Default values kept for backward compatibility with existing test fixtures.
     classification: str = ""                # "true_positive" | "likely_false_positive" | "" (error)
-    severity: str = ""                      # "Low" | "Medium" | "High" | ""
+    severity: str = ""                      # "critical" | "high" | "low" | "" (matches Suricata P1/P2/P3 tiers)
     recommendation: str = ""                # block_source_ip | escalate_tier2 | continue_monitoring
     classification_status: str = "complete" # complete | error
 

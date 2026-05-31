@@ -340,18 +340,18 @@ def _derive_classification_from_analysis(
 
     The cleanest fix is to add the per-alert classification into
     alert_analyses at the source. For this evaluation, we do a best-effort derive:
-      - If confidence >= 0.7 AND the incident's overall severity is High/Medium,
+      - If confidence >= 0.7 AND the incident's overall severity is critical/high,
         treat as true_positive
       - Else likely_false_positive
     """
     confidence = analysis.get("confidence_score", 0.0) or 0.0
-    overall_severity = summary.get("overall_severity", "Low")
+    overall_severity = summary.get("overall_severity", "low")
     attack_type = analysis.get("attack_type_classified", "Other")
 
     if attack_type in ("SQLi", "XSS", "CommandInjection", "PathTraversal",
                        "FileInclusion", "BruteForce") and confidence >= 0.5:
         return "true_positive"
-    if overall_severity in ("High", "Medium") and confidence >= 0.6:
+    if overall_severity in ("critical", "high") and confidence >= 0.6:
         return "true_positive"
     return "likely_false_positive"
 
@@ -366,14 +366,16 @@ def _derive_severity_from_analysis(
     preserved in alert_analyses. Using overall severity is a reasonable proxy
     for incidents where all alerts are the same type.
     """
-    return summary.get("overall_severity", "Low")
+    return summary.get("overall_severity", "low")
 
 
 # ---------------------------------------------------------------------------
 # Metrics computation
 # ---------------------------------------------------------------------------
 
-_SEVERITY_ORDER = {"Low": 1, "Medium": 2, "High": 3}
+# Severity rank for the eval "within-one tier" tolerance check. Matches the
+# custom Suricata rule priority tiers (P1 = critical, P2 = high, P3 = low).
+_SEVERITY_ORDER = {"low": 1, "high": 2, "critical": 3}
 
 
 def compute_metrics(scenario_results: List[ScenarioResult]) -> RunMetrics:

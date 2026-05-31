@@ -296,7 +296,7 @@ function buildIncidentCard(report) {
 
   const card = document.createElement('div');
   const status = sum.incident_status || 'open';
-  const severity = sum.overall_severity || 'Low';
+  const severity = sum.overall_severity || 'low';
   const genStatus = report.generation_status || 'complete';
 
   card.className = `incident-card status-${status} severity-${severity}`;

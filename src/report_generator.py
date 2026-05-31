@@ -80,12 +80,15 @@ CLASSIFICATION RULES:
   Examples: routine internal service communication, normal database traffic,
   scanner noise, legitimate traffic misidentified by broad rules.
 
-SEVERITY SCALE:
-- "High": active confirmed attack with data-exfiltration, system-compromise, or
-  service-disruption potential. Immediate attention required.
-- "Medium": suspicious activity suggesting reconnaissance or attack attempt
-  with uncertain impact.
-- "Low": informational, minimal risk, likely benign or low-confidence indicator.
+SEVERITY SCALE (matches the custom Suricata rule tiers — P1/P2/P3):
+- "critical": confirmed exploit behaviour. Active data extraction, authentication
+  bypass, OS command execution, or cookie exfiltration. Immediate response.
+- "high": clear injection / XSS structure showing attacker intent even when
+  exploitation is not fully confirmed (boolean-blind SQLi, time-based SLEEP,
+  encoded script tag, iframe / marquee injection).
+- "low": broad indicators that are suspicious but inconclusive on their own
+  (lone quote with a SQL keyword, raw event-handler attribute, JS-sink keyword
+  in an otherwise benign request).
 
 RECOMMENDATIONS:
 - "block_source_ip": source IP is clearly malicious; block at firewall.
@@ -100,7 +103,7 @@ You MUST respond with ONLY a JSON object in this exact schema. No prose.
 No markdown code fences. No text outside the JSON.
 {
   "classification": "true_positive" | "likely_false_positive",
-  "severity": "Low" | "Medium" | "High",
+  "severity": "critical" | "high" | "low",
   "summary": "one sentence describing what this alert represents",
   "recommendation": "block_source_ip" | "escalate_tier2" | "continue_monitoring",
   "reasoning": "2-3 sentences explaining your classification"
@@ -218,7 +221,10 @@ Respond with ONLY the JSON object. No markdown. No prose around it."""
 # ---------------------------------------------------------------------------
 
 _VALID_CLASSIFICATIONS = {"true_positive", "likely_false_positive"}
-_VALID_SEVERITIES = {"Low", "Medium", "High"}
+# Severity scale matches the custom Suricata rule priority tiers
+# (P1 = critical, P2 = high, P3 = low). No medium tier — neither the
+# Suricata rules nor the dashboard render one.
+_VALID_SEVERITIES = {"critical", "high", "low"}
 _VALID_RECOMMENDATIONS = {"block_source_ip", "escalate_tier2", "continue_monitoring"}
 
 
@@ -256,11 +262,16 @@ def _validate_stage1_response(data: dict) -> dict:
         )
     data["classification"] = classification
 
-    # Severity (capitalise first letter)
-    severity_raw = str(data.get("severity", "")).strip()
-    # Map "critical" -> "High" defensively (some models use different scales)
-    severity_map = {"critical": "High", "info": "Low", "informational": "Low"}
-    normalised = severity_map.get(severity_raw.lower(), severity_raw.capitalize())
+    # Severity — fold common model dialects into the canonical lowercase
+    # tier names. "medium" is a relic from a previous 4-tier scale; we
+    # bucket it to "high" since that's where the Suricata P2 rules sit.
+    severity_raw = str(data.get("severity", "")).strip().lower()
+    severity_map = {
+        "info":          "low",
+        "informational": "low",
+        "medium":        "high",
+    }
+    normalised = severity_map.get(severity_raw, severity_raw)
     if normalised not in _VALID_SEVERITIES:
         errors.append(
             f"Invalid severity '{data.get('severity')}'. "
@@ -352,10 +363,13 @@ def _build_stage1_user_prompt(alert: AlertRecord) -> str:
 # Rule-based derivations
 # ---------------------------------------------------------------------------
 
+# CVSS estimate per severity tier. Values picked to sit roughly inside the
+# CVSS v3 base-score bands (critical 9.0+, high 7.0-8.9, low 0.1-3.9) so the
+# dashboard shows a sensible number alongside the verdict.
 _SEVERITY_TO_CVSS = {
-    "High": 7.5,
-    "Medium": 5.0,
-    "Low": 3.0,
+    "critical": 9.0,
+    "high":     7.5,
+    "low":      3.0,
 }
 
 # Endpoint path patterns to data sensitivity ratings.
@@ -550,9 +564,12 @@ def _template_stage2_output(
     Produces the same shape as the Stage 2 LLM response so downstream code
     doesn't need to branch.
     """
+    # Block-worthy IPs: the IPs behind any confirmed critical-tier (P1
+    # equivalent) true positive. high-tier alerts still get a suggestion
+    # but aren't auto-blocked here.
     high_tp_ips = sorted({
         c.src_ip for c in classifications
-        if c.classification == "true_positive" and c.severity == "High"
+        if c.classification == "true_positive" and c.severity == "critical"
     })
 
     # Overview
@@ -605,9 +622,12 @@ def _template_stage2_output(
         suggestions.append("Investigate classification errors in the pipeline.")
     suggestions.append("Continue monitoring for follow-up activity from this source.")
 
-    # Exposure
+    # Exposure: only flag exposure when at least one true positive sits at
+    # the critical or high tier — low-tier TPs are detection signals but
+    # don't on their own imply confirmed exposure.
     exposure_detected = tp_count > 0 and any(
-        c.severity == "High" for c in classifications if c.classification == "true_positive"
+        c.severity in ("critical", "high")
+        for c in classifications if c.classification == "true_positive"
     )
     exposure_types = []
     if "SQLi" in detected_attacks:
@@ -1315,7 +1335,7 @@ class ReportGenerator:
             total_alerts=incident.alert_count,
             classification_counts={"true_positive": 0, "likely_false_positive": 0, "error": incident.alert_count},
             detected_attacks=["unknown"],
-            overall_severity="Low",
+            overall_severity="low",
             overall_cvss_estimate=0.0,
             repeat_offender=bool(self._is_repeat_offender(incident.source_ip)),
         )
@@ -1370,7 +1390,7 @@ class ReportGenerator:
             total_alerts=0,
             classification_counts={"true_positive": 0, "likely_false_positive": 0, "error": 0},
             detected_attacks=[],
-            overall_severity="Low",
+            overall_severity="low",
             overall_cvss_estimate=0.0,
             repeat_offender=False,
         )
@@ -1928,16 +1948,17 @@ def _override_mitre_tactic(
     return chosen, chosen != current_tactic
 
 
-_SEVERITY_ORDER = {"High": 3, "Medium": 2, "Low": 1}
+# Ordering for max() reduction. Matches the Suricata rule priority tiers.
+_SEVERITY_ORDER = {"critical": 3, "high": 2, "low": 1}
 
 
 def _compute_overall_severity(classifications: List[AlertClassification]) -> str:
     """Return the highest severity across all successful classifications.
 
-    Defaults to 'Low' if no successful classifications exist.
+    Defaults to 'low' if no successful classifications exist.
     """
     highest = 0
-    label = "Low"
+    label = "low"
     for c in classifications:
         if c.status != "complete":
             continue

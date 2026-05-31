@@ -80,11 +80,15 @@ CLASSIFICATION RULES:
 - "true_positive": a genuine security threat or confirmed attack attempt.
 - "likely_false_positive": benign or expected infrastructure behaviour.
 
-SEVERITY SCALE:
-- "High": active confirmed attack with data-exfiltration / compromise / DoS
-  potential. Immediate attention required.
-- "Medium": suspicious activity, recon, or attempt with uncertain impact.
-- "Low": informational, minimal risk, likely benign.
+SEVERITY SCALE (matches the custom Suricata rule tiers — P1/P2/P3):
+- "critical": confirmed exploit behaviour (UNION-SELECT credential pull,
+  cookie exfiltration, OS command execution, authentication bypass).
+- "high": clear injection / XSS structure showing intent even when
+  exploitation isn't fully confirmed (boolean-blind SQLi, SLEEP probes,
+  encoded script / iframe tags).
+- "low": broad indicators suspicious on their own but inconclusive
+  (lone quote with a SQL keyword, raw event-handler, JS-sink keyword
+  in an otherwise benign request).
 
 RECOMMENDATIONS:
 - "block_source_ip": confirmed malicious; block at firewall.
@@ -115,7 +119,7 @@ To finish:
 <final_answer>
 {
   "classification": "true_positive" | "likely_false_positive",
-  "severity": "Low" | "Medium" | "High",
+  "severity": "critical" | "high" | "low",
   "summary": "one sentence describing what this alert represents",
   "recommendation": "block_source_ip" | "escalate_tier2" | "continue_monitoring",
   "reasoning": "2-3 sentences explaining your classification, citing CONCRETE facts from the enrichment data (e.g. 'prior_alert_count=14', 'env role=internal_database'), NOT generic statements"
@@ -158,7 +162,7 @@ User alert:
 Your response:
 <thought>UNION SELECT in URL targeting user credentials. Unambiguous SQLi. No tools needed.</thought>
 <final_answer>
-{"classification": "true_positive", "severity": "High", "summary": "UNION-based SQL injection extracting credentials", "recommendation": "block_source_ip", "reasoning": "URL contains explicit UNION SELECT user, password FROM users payload — credential exfiltration intent. High severity due to confirmed data extraction attempt."}
+{"classification": "true_positive", "severity": "critical", "summary": "UNION-based SQL injection extracting credentials", "recommendation": "block_source_ip", "reasoning": "URL contains explicit UNION SELECT user, password FROM users payload — credential exfiltration intent. Critical severity matches Suricata P1 active-extraction tier."}
 </final_answer>
 
 --- Example 2: ambiguous internal traffic, one tool needed ---
@@ -174,7 +178,7 @@ Your response:
 <observation>{"match_found": true, "role": "internal_database", "description": "MariaDB inside Docker bridge. Port 3306 traffic is expected internal database communication.", "classification_hint": "likely_false_positive_if_internal_only"}</observation>
 <thought>Confirmed: expected internal database communication, not an attack.</thought>
 <final_answer>
-{"classification": "likely_false_positive", "severity": "Low", "summary": "Expected internal Docker database communication", "recommendation": "continue_monitoring", "reasoning": "Source 172.18.0.3 (DVWA app) to 172.18.0.2 (MariaDB) on 3306 is documented internal infrastructure traffic. The ET SCAN signature matches the pattern but it is not an attack here."}
+{"classification": "likely_false_positive", "severity": "low", "summary": "Expected internal Docker database communication", "recommendation": "continue_monitoring", "reasoning": "Source 172.18.0.3 (DVWA app) to 172.18.0.2 (MariaDB) on 3306 is documented internal infrastructure traffic. The ET SCAN signature matches the pattern but it is not an attack here."}
 </final_answer>
 
 --- Example 3: repeat offender, severity bumped ---
@@ -189,7 +193,7 @@ Your response:
 <observation>{"total_prior_alerts": 14, "attack_types_seen": ["SQLi", "XSS"], "is_repeat_offender_this_session": true}</observation>
 <thought>14 prior alerts spanning SQLi and XSS — active multi-vector attacker.</thought>
 <final_answer>
-{"classification": "true_positive", "severity": "High", "summary": "SQLi probe from active attacker (14 prior alerts, multiple techniques)", "recommendation": "block_source_ip", "reasoning": "Source IP has 14 prior alerts across SQLi and XSS in last 24h — sustained multi-vector campaign. Block to interrupt."}
+{"classification": "true_positive", "severity": "high", "summary": "SQLi probe from active attacker (14 prior alerts, multiple techniques)", "recommendation": "block_source_ip", "reasoning": "Source IP has 14 prior alerts across SQLi and XSS in last 24h — sustained multi-vector campaign. Boolean-blind injection structure is P2-tier high. Block to interrupt."}
 </final_answer>
 
 --- Example 4: enrichment fully resolves the verdict — straight to final_answer (no extra tools) ---
@@ -207,7 +211,7 @@ System enrichment (already in your prompt):
 Your response (NOTE: thought SYNTHESISES the facts; no "let me check"):
 <thought>Enrichment shows untrusted-external source IP (192.168.56.1) with 2 prior alerts this session; signature targets the users table via UNION SELECT. No additional tools needed — the verdict is determined.</thought>
 <final_answer>
-{"classification": "true_positive", "severity": "High", "summary": "UNION-based SQLi targeting user credentials from confirmed adversarial source", "recommendation": "block_source_ip", "reasoning": "Source 192.168.56.1 is in the untrusted host-only attacker network and has 2 prior alerts this session. The payload contains 'UNION SELECT user, password FROM users' — explicit credential extraction attempt."}
+{"classification": "true_positive", "severity": "critical", "summary": "UNION-based SQLi targeting user credentials from confirmed adversarial source", "recommendation": "block_source_ip", "reasoning": "Source 192.168.56.1 is in the untrusted host-only attacker network and has 2 prior alerts this session. The payload contains 'UNION SELECT user, password FROM users' — explicit credential extraction matches Suricata P1 critical tier."}
 </final_answer>
 """
 

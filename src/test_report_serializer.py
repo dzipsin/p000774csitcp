@@ -111,7 +111,7 @@ def _make_alert_record(
 def _make_minimal_report(
     alert_records: List[AlertRecord],
     detected_attacks: List[str] = None,
-    overall_severity: str = "High",
+    overall_severity: str = "critical",
     repeat_offender: bool = False,
 ) -> IncidentReport:
     detected_attacks = detected_attacks if detected_attacks is not None else ["SQLi"]
@@ -149,7 +149,7 @@ def _make_minimal_report(
                 likely_intent="database extraction",
                 confidence_score=0.85,
                 classification="true_positive",
-                severity="High",
+                severity="critical",
                 recommendation="block_source_ip",
                 classification_status="complete",
             )
@@ -187,31 +187,37 @@ def _make_minimal_report(
 # Helper tests
 # ---------------------------------------------------------------------------
 
-def test_normalise_severity_collapses_critical() -> None:
-    _section("_normalise_severity: critical -> High (3-level scale)")
-    _assert(_normalise_severity("critical") == "High", "lowercase critical -> High")
-    _assert(_normalise_severity("Critical") == "High", "capitalised Critical -> High (via lowercase fallback)")
+def test_normalise_severity_critical_passthrough() -> None:
+    _section("_normalise_severity: critical stays critical (3-tier P1/P2/P3 scale)")
+    _assert(_normalise_severity("critical") == "critical", "lowercase critical -> critical")
+    _assert(_normalise_severity("Critical") == "critical", "capitalised Critical -> critical (lowercased)")
 
 
 def test_normalise_severity_3_levels() -> None:
-    _section("_normalise_severity: lowercase variants")
-    _assert(_normalise_severity("high") == "High", "high -> High")
-    _assert(_normalise_severity("medium") == "Medium", "medium -> Medium")
-    _assert(_normalise_severity("low") == "Low", "low -> Low")
+    _section("_normalise_severity: canonical lowercase variants")
+    _assert(_normalise_severity("critical") == "critical", "critical -> critical")
+    _assert(_normalise_severity("high") == "high", "high -> high")
+    _assert(_normalise_severity("low") == "low", "low -> low")
 
 
-def test_normalise_severity_capitalised_passthrough() -> None:
-    _section("_normalise_severity: already capitalised passes through")
-    _assert(_normalise_severity("High") == "High", "High passthrough")
-    _assert(_normalise_severity("Medium") == "Medium", "Medium passthrough")
-    _assert(_normalise_severity("Low") == "Low", "Low passthrough")
+def test_normalise_severity_legacy_dialects() -> None:
+    _section("_normalise_severity: legacy dialects fold into the 3-tier scale")
+    # Legacy 4-tier "Medium" maps onto the Suricata P2 band (high).
+    _assert(_normalise_severity("medium") == "high", "medium -> high (P2 bucket)")
+    _assert(_normalise_severity("Medium") == "high", "capitalised Medium -> high")
+    # "info"/"informational" still seen from some upstream feeds — collapse to low.
+    _assert(_normalise_severity("info") == "low", "info -> low")
+    _assert(_normalise_severity("informational") == "low", "informational -> low")
+    # Legacy TitleCase forms still parsable for back-compat with stored reports.
+    _assert(_normalise_severity("High") == "high", "High -> high")
+    _assert(_normalise_severity("Low") == "low", "Low -> low")
 
 
 def test_normalise_severity_empty_defaults_low() -> None:
-    _section("_normalise_severity: empty/unknown -> Low")
-    _assert(_normalise_severity("") == "Low", "empty -> Low")
-    _assert(_normalise_severity(None) == "Low", "None -> Low")
-    _assert(_normalise_severity("nonsense") == "Low", "unknown -> Low")
+    _section("_normalise_severity: empty/unknown -> low")
+    _assert(_normalise_severity("") == "low", "empty -> low")
+    _assert(_normalise_severity(None) == "low", "None -> low")
+    _assert(_normalise_severity("nonsense") == "low", "unknown -> low")
 
 
 def test_coerce_port() -> None:
@@ -267,7 +273,7 @@ def test_serialise_alerts_renames_fields() -> None:
     _assert(alert["event_timestamp"] == rec.timestamp_raw, "timestamp_raw -> event_timestamp")
 
     # Severity normalisation
-    _assert(alert["severity"] == "High", "severity_label high -> High")
+    _assert(alert["severity"] == "high", "severity_label high -> high passthrough")
 
     # Port coercion
     _assert(alert["source_port"] == 12345, "source_port int")
@@ -444,10 +450,13 @@ def test_missing_alert_required_field_rejected() -> None:
 
 
 def test_bad_severity_enum_rejected() -> None:
-    _section("Schema validation: invalid severity enum rejected")
+    _section("Schema validation: out-of-scale severity rejected")
 
     rec = _make_alert_record()
     payload = to_template_v1(_make_minimal_report([rec]))
+    # "Critical" (TitleCase) is no longer in the schema enum — the canonical
+    # form is lowercase "critical". This guards the schema against bypassing
+    # normalisation.
     payload["incident_summary"]["overall_severity"] = "Critical"
 
     raised = False
@@ -455,7 +464,7 @@ def test_bad_severity_enum_rejected() -> None:
         validate_template_v1(payload)
     except ValidationError:
         raised = True
-    _assert(raised, "severity 'Critical' rejected (3-level scale)")
+    _assert(raised, "TitleCase 'Critical' rejected by lowercase 3-tier enum")
 
 
 def test_bad_type_rejected() -> None:
@@ -541,9 +550,9 @@ def test_to_template_v1_metadata_block_present() -> None:
 def main() -> int:
     tests = [
         # Helpers
-        test_normalise_severity_collapses_critical,
+        test_normalise_severity_critical_passthrough,
         test_normalise_severity_3_levels,
-        test_normalise_severity_capitalised_passthrough,
+        test_normalise_severity_legacy_dialects,
         test_normalise_severity_empty_defaults_low,
         test_coerce_port,
         test_endpoint_from_url,

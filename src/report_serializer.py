@@ -54,7 +54,9 @@ log = logging.getLogger(__name__)
 # (incident_id, classification per alert, etc.) survive the schema check.
 # ---------------------------------------------------------------------------
 
-_VALID_SEVERITIES = ["Low", "Medium", "High"]
+# Lowercase 3-tier — matches the custom Suricata rules' priority tiers
+# (P1 = critical, P2 = high, P3 = low) and the dashboard alert filter.
+_VALID_SEVERITIES = ["critical", "high", "low"]
 
 TEMPLATE_V1_SCHEMA: Dict[str, Any] = {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -276,29 +278,29 @@ def validate_template_v1(data: Dict[str, Any]) -> None:
 # Helpers — type coercion and field mapping
 # ---------------------------------------------------------------------------
 
-# Map AlertRecord.severity_label (lowercase) -> template severity (capitalized).
-# "critical" is collapsed to "High" because the project spec uses a 3-level
-# scale (Low/Medium/High) per docs/AGENT_DESIGN.md §15 decision 11.
+# Maps any dialect of severity we might see (legacy TitleCase, "info",
+# "medium", upstream Suricata severity labels) onto the canonical lowercase
+# 3-tier scale. "medium" buckets to "high" since that's where the Suricata
+# P2 rules sit — the legacy 4-tier ladder was retired.
 _SEVERITY_NORMALISE = {
-    "critical": "High",
-    "high": "High",
-    "medium": "Medium",
-    "low": "Low",
+    "critical":      "critical",
+    "high":          "high",
+    "medium":        "high",
+    "low":           "low",
+    "info":          "low",
+    "informational": "low",
 }
 
 
 def _normalise_severity(value: Any) -> str:
     """Coerce a severity label to the template enum.
 
-    Empty or unknown values default to "Low" so the schema always validates.
+    Empty or unknown values default to "low" so the schema always validates.
     """
     if not value:
-        return "Low"
-    text = str(value).strip()
-    # If already capitalized (Low/Medium/High), accept as-is.
-    if text in _VALID_SEVERITIES:
-        return text
-    return _SEVERITY_NORMALISE.get(text.lower(), "Low")
+        return "low"
+    text = str(value).strip().lower()
+    return _SEVERITY_NORMALISE.get(text, "low")
 
 
 def _coerce_port(value: Any) -> Optional[int]:

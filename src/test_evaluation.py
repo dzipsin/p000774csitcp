@@ -71,15 +71,17 @@ class ScenarioAwareProvider(ModelProvider):
         scenario = find_scenario(eval_id) if eval_id else None
 
         if scenario is None:
-            # Unknown scenario — default to "true_positive High"
+            # Unknown scenario — default to "true_positive high"
             return json.dumps({
                 "classification": "true_positive",
-                "severity": "High",
+                "severity": "high",
                 "summary": "unknown test scenario",
                 "recommendation": "escalate_tier2",
                 "reasoning": "no matching eval_id",
             })
 
+        # Only auto-block at the critical tier (P1 equivalent). High tier still
+        # warrants escalation but not an immediate block from a mock.
         return json.dumps({
             "classification": scenario.expected_classification,
             "severity": scenario.expected_severity,
@@ -87,7 +89,7 @@ class ScenarioAwareProvider(ModelProvider):
             "recommendation": (
                 "block_source_ip"
                 if scenario.expected_classification == "true_positive"
-                and scenario.expected_severity == "High"
+                and scenario.expected_severity == "critical"
                 else "escalate_tier2"
                 if scenario.expected_classification == "true_positive"
                 else "continue_monitoring"
@@ -152,8 +154,15 @@ def _synthetic_alert_for(scenario) -> AlertRecord:
         timestamp_raw=time.strftime("%Y-%m-%dT%H:%M:%S"),
         timestamp_display=time.strftime("%H:%M:%S"),
         timestamp_epoch=time.time(),
-        severity_level=1 if scenario.expected_severity == "High" else 2 if scenario.expected_severity == "Medium" else 3,
-        severity_label=scenario.expected_severity.lower() if scenario.expected_severity else "low",
+        # Suricata-style severity_level: 1 = critical, 2 = high, 3 = low.
+        # expected_severity already uses the lowercase 3-tier scale, so the
+        # severity_label is a straight passthrough.
+        severity_level=(
+            1 if scenario.expected_severity == "critical"
+            else 2 if scenario.expected_severity == "high"
+            else 3
+        ),
+        severity_label=scenario.expected_severity or "low",
         src_ip="192.168.56.1",
         src_port="54321",
         dst_ip="172.18.0.2",
@@ -294,7 +303,7 @@ def test_metrics_computation():
     # Build synthetic scenario_results that exercise every metric
     from evaluation.scenarios import Scenario
 
-    def sr(expected, predicted, severity_exp="High", severity_act="High"):
+    def sr(expected, predicted, severity_exp="critical", severity_act="critical"):
         scenario = Scenario(
             eval_id=f"test_{id(predicted)}",
             category="SQLi",
@@ -372,7 +381,7 @@ def test_report_writer():
         method="GET",
         path="/",
         expected_classification="true_positive",
-        expected_severity="High",
+        expected_severity="critical",
         expected_attack_type="SQLi",
     )
     fr = FireResult(
@@ -384,7 +393,7 @@ def test_report_writer():
     result.status = "matched"
     result.classification = {
         "classification": "true_positive",
-        "severity": "High",
+        "severity": "critical",
         "attack_type": "SQLi",
         "confidence_score": 0.9,
         "status": "complete",

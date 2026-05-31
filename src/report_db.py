@@ -286,7 +286,7 @@ class ReportDatabase:
                         incident_id,
                         str(summary.get("source_ip", "")),
                         str(summary.get("incident_status", "open")),
-                        str(summary.get("overall_severity", "Low")),
+                        str(summary.get("overall_severity", "low")),
                         float(summary.get("overall_cvss_estimate", 0.0) or 0.0),
                         1 if summary.get("repeat_offender") else 0,
                         int(summary.get("total_alerts", 0) or 0),

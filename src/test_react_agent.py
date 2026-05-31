@@ -213,7 +213,7 @@ def _make_agent(provider, tools, **kwargs):
 
 def _final_answer_xml(
     classification: str = "true_positive",
-    severity: str = "High",
+    severity: str = "critical",
     summary: str = "test summary",
     recommendation: str = "block_source_ip",
     reasoning: str = "test reasoning explaining classification",
@@ -329,7 +329,7 @@ def test_direct_final_answer_no_tool() -> None:
 
     _assert(cls.status == "complete", "status complete", cls.status)
     _assert(cls.classification == "true_positive", "classification set")
-    _assert(cls.severity == "High", "severity set")
+    _assert(cls.severity == "critical", "severity set")
     _assert(cls.recommendation == "block_source_ip", "recommendation set")
     _assert(cls.agent_mode == "react", "agent_mode marked react")
     _assert(cls.tool_calls == 0, "no tools used")
@@ -405,7 +405,7 @@ def test_parse_failure_exhausts_retries_falls_back() -> None:
         responses=["garbage 1", "garbage 2"],
         # Single-shot fallback then provides a clean JSON
         json_responses=[
-            '{"classification": "likely_false_positive", "severity": "Low", '
+            '{"classification": "likely_false_positive", "severity": "low", '
             '"summary": "fallback verdict", "recommendation": "continue_monitoring", '
             '"reasoning": "fell back to single-shot after parse failures"}'
         ],
@@ -474,7 +474,7 @@ def test_llm_call_raises_falls_back() -> None:
     provider = MockProvider(
         responses=[RuntimeError("network down")],
         json_responses=[
-            '{"classification": "true_positive", "severity": "Medium", '
+            '{"classification": "true_positive", "severity": "high", '
             '"summary": "fallback verdict", "recommendation": "escalate_tier2", '
             '"reasoning": "fallback after LLM error"}'
         ],
@@ -484,7 +484,7 @@ def test_llm_call_raises_falls_back() -> None:
 
     _assert(cls.status == "partial", "partial after LLM error + fallback",
             cls.status)
-    _assert(cls.severity == "Medium", "fallback verdict used")
+    _assert(cls.severity == "high", "fallback verdict used")
     _assert(len(cls.reasoning_trace) == 1, "one step recording the LLM error")
     _assert(cls.reasoning_trace[0].parse_error is not None, "parse_error set on the failed step")
 
@@ -497,7 +497,7 @@ def test_iteration_cap_falls_back() -> None:
     provider = MockProvider(
         responses=actions,
         json_responses=[
-            '{"classification": "likely_false_positive", "severity": "Low", '
+            '{"classification": "likely_false_positive", "severity": "low", '
             '"summary": "fallback after iter cap", "recommendation": "continue_monitoring", '
             '"reasoning": "iteration cap hit"}'
         ],
@@ -516,7 +516,7 @@ def test_final_answer_validation_failure() -> None:
 
     bad_final = """<thought>done</thought>
 <final_answer>
-{"classification": "totally_wrong_label", "severity": "High",
+{"classification": "totally_wrong_label", "severity": "critical",
  "summary": "x", "recommendation": "block_source_ip", "reasoning": "y"}
 </final_answer>"""
 

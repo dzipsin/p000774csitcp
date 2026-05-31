@@ -59,7 +59,7 @@ class FakeProvider(ModelProvider):
             # Stage 1
             return json.dumps({
                 "classification": "true_positive",
-                "severity": "High",
+                "severity": "critical",
                 "summary": "SQLi attempt captured",
                 "recommendation": "block_source_ip",
                 "reasoning": "Clear UNION SELECT payload targeting users table.",
@@ -160,7 +160,7 @@ def test_pipeline_basic_flow():
         assert report.incident_summary.total_alerts == 3
         assert report.incident_summary.source_ip == "192.168.56.1"
         assert report.incident_summary.classification_counts["true_positive"] == 3
-        assert report.incident_summary.overall_severity == "High"
+        assert report.incident_summary.overall_severity == "critical"
 
         # Storage should hold exactly the one incident we generated
         stored = storage.list_reports()
@@ -429,7 +429,7 @@ def test_pipeline_react_agent_path():
 
     final_xml = """<thought>SQLi detected, classifying directly.</thought>
 <final_answer>
-{"classification": "true_positive", "severity": "High",
+{"classification": "true_positive", "severity": "critical",
  "summary": "SQLi credential extraction", "recommendation": "block_source_ip",
  "reasoning": "URL contains UNION SELECT user, password — credential exfiltration intent."}
 </final_answer>"""
@@ -492,8 +492,8 @@ def test_pipeline_react_agent_path():
         assert analysis.classification == "true_positive", (
             f"Expected true_positive, got '{analysis.classification}'"
         )
-        assert analysis.severity == "High", (
-            f"Expected High, got '{analysis.severity}'"
+        assert analysis.severity == "critical", (
+            f"Expected critical, got '{analysis.severity}'"
         )
         assert analysis.recommendation == "block_source_ip"
 

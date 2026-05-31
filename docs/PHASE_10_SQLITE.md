@@ -98,7 +98,7 @@ implement one of the methods degrades to `503` rather than crashing.
 |---|---|---|
 | `GET` | `/api/incidents/by-ip/<source_ip>?hours=N` | All incidents from a source IP, optionally bounded to last N hours |
 | `GET` | `/api/incidents/by-attack/<attack_type>?hours=N` | All incidents whose `detected_attacks` array contains attack_type |
-| `GET` | `/api/incidents/by-severity/<severity>` | Filter by `overall_severity` (Low / Medium / High) |
+| `GET` | `/api/incidents/by-severity/<severity>` | Filter by `overall_severity` (critical / high / low) |
 | `GET` | `/api/incidents/stats?hours=N` | Counts by status / severity / attack type plus repeat_offenders |
 | `POST` | `/api/incidents/cleanup` | Manually trigger retention sweep, returns `{dropped: N}` |
 

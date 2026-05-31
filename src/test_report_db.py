@@ -48,7 +48,7 @@ from report_db import ReportDatabase
 def _make_report(
     incident_id: str,
     source_ip: str = "192.168.56.1",
-    severity: str = "High",
+    severity: str = "high",
     repeat_offender: bool = False,
     detected: list = None,
     generated_at: str = None,
@@ -219,14 +219,14 @@ def test_save_upserts_same_incident_id():
     d = _tmp_dir()
     try:
         db = ReportDatabase(db_path=str(d / "reports.db"))
-        r1 = _make_report(incident_id="same-id-001", severity="Low")
+        r1 = _make_report(incident_id="same-id-001", severity="low")
         db.save(r1)
-        r2 = _make_report(incident_id="same-id-001", severity="High")
+        r2 = _make_report(incident_id="same-id-001", severity="critical")
         db.save(r2)
         # Only 1 row
         assert len(db.list_reports()) == 1
         loaded = db.load_raw("same-id-001")
-        assert loaded["incident_summary"]["overall_severity"] == "High", (
+        assert loaded["incident_summary"]["overall_severity"] == "critical", (
             "second save did not overwrite the severity field"
         )
         print("    PASS: upsert preserved single row with updated content")
@@ -301,14 +301,14 @@ def test_list_by_severity():
     d = _tmp_dir()
     try:
         db = ReportDatabase(db_path=str(d / "reports.db"))
-        db.save(_make_report(incident_id="h1", severity="High"))
-        db.save(_make_report(incident_id="m1", severity="Medium"))
-        db.save(_make_report(incident_id="l1", severity="Low"))
-        db.save(_make_report(incident_id="h2", severity="High"))
+        db.save(_make_report(incident_id="c1", severity="critical"))
+        db.save(_make_report(incident_id="h1", severity="high"))
+        db.save(_make_report(incident_id="l1", severity="low"))
+        db.save(_make_report(incident_id="c2", severity="critical"))
 
-        assert len(db.list_by_severity("High")) == 2
-        assert len(db.list_by_severity("Medium")) == 1
-        assert len(db.list_by_severity("Low")) == 1
+        assert len(db.list_by_severity("critical")) == 2
+        assert len(db.list_by_severity("high")) == 1
+        assert len(db.list_by_severity("low")) == 1
         print("    PASS: severity filter returned 2/1/1 matches")
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -319,19 +319,19 @@ def test_aggregate_stats():
     d = _tmp_dir()
     try:
         db = ReportDatabase(db_path=str(d / "reports.db"))
-        db.save(_make_report(incident_id="s1", severity="High", status="open",
+        db.save(_make_report(incident_id="s1", severity="critical", status="open",
                              detected=["SQLi"], repeat_offender=True))
-        db.save(_make_report(incident_id="s2", severity="High", status="closed",
+        db.save(_make_report(incident_id="s2", severity="critical", status="closed",
                              detected=["SQLi", "XSS"], repeat_offender=False))
-        db.save(_make_report(incident_id="s3", severity="Low", status="closed",
+        db.save(_make_report(incident_id="s3", severity="low", status="closed",
                              detected=["Reconnaissance"], repeat_offender=False))
 
         stats = db.aggregate_stats()
         assert stats["total_incidents"] == 3
         assert stats["by_status"].get("open") == 1
         assert stats["by_status"].get("closed") == 2
-        assert stats["by_severity"].get("High") == 2
-        assert stats["by_severity"].get("Low") == 1
+        assert stats["by_severity"].get("critical") == 2
+        assert stats["by_severity"].get("low") == 1
         assert stats["by_attack_type"].get("SQLi") == 2
         assert stats["by_attack_type"].get("XSS") == 1
         assert stats["by_attack_type"].get("Reconnaissance") == 1

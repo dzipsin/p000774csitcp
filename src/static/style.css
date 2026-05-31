@@ -280,9 +280,11 @@ header {
 .incident-card.status-error   { border-left-color: var(--critical); }
 .incident-card.hidden         { display: none; }
 
-.incident-card.severity-High    { box-shadow: inset 4px 0 0 var(--critical); }
-.incident-card.severity-Medium  { box-shadow: inset 4px 0 0 var(--high); }
-.incident-card.severity-Low     { box-shadow: inset 4px 0 0 var(--low); }
+/* Per-incident severity stripe. Class name matches IncidentSummary.overall_severity
+   (lowercase 3-tier: critical / high / low). */
+.incident-card.severity-critical { box-shadow: inset 4px 0 0 var(--critical); }
+.incident-card.severity-high     { box-shadow: inset 4px 0 0 var(--high); }
+.incident-card.severity-low      { box-shadow: inset 4px 0 0 var(--low); }
 
 /* ── Incident header row ───────────────────────────────────────────── */
 .incident-header {

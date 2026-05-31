@@ -464,14 +464,14 @@ logs.
 
 **Final answer branch:**
 ```
-<thought>12 prior SQLi alerts from same IP. Active campaign. High severity, block the IP.</thought>
+<thought>12 prior SQLi alerts from same IP. Active campaign. Critical tier, block the IP.</thought>
 <final_answer>
 {
   "classification": "true_positive",
-  "severity": "High",
+  "severity": "critical",
   "summary": "Active SQLi campaign from repeat offender 192.168.56.1",
   "recommendation": "block_source_ip",
-  "reasoning": "12 prior SQLi alerts from same source IP in past 24h indicates sustained attack. Block the source IP to interrupt the campaign."
+  "reasoning": "12 prior SQLi alerts from same source IP in past 24h indicates sustained attack matching Suricata P1 critical tier. Block the source IP to interrupt the campaign."
 }
 </final_answer>
 ```

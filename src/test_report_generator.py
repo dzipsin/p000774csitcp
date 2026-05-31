@@ -133,7 +133,8 @@ class MockProvider(ModelProvider):
 def _good_stage1_response() -> str:
     return json.dumps({
         "classification": "true_positive",
-        "severity": "High",
+        # Severity scale matches Suricata rule tiers (critical / high / low).
+        "severity": "critical",
         "summary": "SQL injection attempt detected in URL parameter",
         "recommendation": "block_source_ip",
         "reasoning": "The request contains a UNION SELECT payload targeting the users table. This is a clear data extraction attempt.",
@@ -253,8 +254,9 @@ def test_happy_path():
         assert report.incident_summary.total_alerts == 2
         assert "SQLi" in report.incident_summary.detected_attacks
         assert "XSS" in report.incident_summary.detected_attacks
-        assert report.incident_summary.overall_severity == "High"
-        assert report.incident_summary.overall_cvss_estimate == 7.5
+        assert report.incident_summary.overall_severity == "critical"
+        # critical maps to CVSS 9.0 per _SEVERITY_TO_CVSS.
+        assert report.incident_summary.overall_cvss_estimate == 9.0
         assert len(report.alert_analyses) == 2
         assert len(report.alert_exposures) == 2
         assert report.incident_summary_description.overview, "Overview should not be empty"
@@ -309,15 +311,17 @@ def test_stage1_retry_recovers():
     print("    PASS: retry recovered from first failure")
 
 
-def test_stage1_bad_enum_values():
-    print("\n=== Test 4: Stage 1 returns invalid enum values ===")
+def test_stage1_severity_dialect_normalisation():
+    print("\n=== Test 4: Stage 1 'medium' folds onto the canonical tier ===")
 
+    # The valid scale is critical / high / low. A model that still emits the
+    # legacy "medium" tier should be coerced to "high" (matching the Suricata
+    # P2 layer) rather than rejected outright. Mixed-case input also accepted.
     provider = MockProvider()
-    # Invalid severity ("CRITICAL" not in our map, but "critical" is normalised to "High")
     provider.set_stage1_responses([
         json.dumps({
             "classification": "true_positive",
-            "severity": "critical",  # lowercase, should map to "High"
+            "severity": "Medium",  # legacy dialect; should fold to "high"
             "summary": "test",
             "recommendation": "block_source_ip",
             "reasoning": "test reasoning",
@@ -328,10 +332,9 @@ def test_stage1_bad_enum_values():
     incident = _make_incident([_make_alert()])
     report = gen.generate(incident)
 
-    # "critical" maps to "High" in our normaliser
     assert report.generation_status == "complete"
-    assert report.incident_summary.overall_severity == "High"
-    print("    PASS: 'critical' severity normalised to 'High'")
+    assert report.incident_summary.overall_severity == "high"
+    print("    PASS: 'Medium' severity folded onto 'high'")
 
 
 def test_stage1_markdown_fences():
@@ -426,16 +429,17 @@ def test_template_mode():
 def test_rule_based_cvss():
     print("\n=== Test 10: CVSS derived from severity ===")
 
+    # CVSS map: critical=9.0, high=7.5, low=3.0. Validate the "high" tier
+    # (P2 equivalent) propagates to both the incident-level and per-alert
+    # exposure CVSS estimate.
     provider = MockProvider()
-
-    # Return a Medium severity
     provider.set_stage1_responses([
         json.dumps({
             "classification": "true_positive",
-            "severity": "Medium",
+            "severity": "high",
             "summary": "test",
             "recommendation": "escalate_tier2",
-            "reasoning": "medium confidence",
+            "reasoning": "high tier — boolean-blind SQLi pattern",
         }),
     ])
     gen = ReportGenerator(provider=provider)
@@ -443,11 +447,11 @@ def test_rule_based_cvss():
     incident = _make_incident([_make_alert()])
     report = gen.generate(incident)
 
-    assert report.incident_summary.overall_cvss_estimate == 5.0, (
-        f"Medium should map to 5.0, got {report.incident_summary.overall_cvss_estimate}"
+    assert report.incident_summary.overall_cvss_estimate == 7.5, (
+        f"high should map to 7.5, got {report.incident_summary.overall_cvss_estimate}"
     )
-    assert report.alert_exposures[0].cvss_estimate == 5.0
-    print("    PASS: Medium severity -> CVSS 5.0 for both incident and alert")
+    assert report.alert_exposures[0].cvss_estimate == 7.5
+    print("    PASS: high severity -> CVSS 7.5 for both incident and alert")
 
 
 def test_rule_based_iocs_and_data_fields():
@@ -574,7 +578,7 @@ def test_unicode_in_response():
     provider.set_stage1_responses([
         json.dumps({
             "classification": "true_positive",
-            "severity": "High",
+            "severity": "critical",
             "summary": "Injection attempt from 中国 — naïve payload with émoji 🔥",
             "recommendation": "block_source_ip",
             "reasoning": "Contains non-ASCII characters — should round-trip cleanly.",
@@ -844,7 +848,7 @@ def test_mitre_override_integrated_in_generate():
     provider.set_stage1_responses([
         json.dumps({
             "classification": "true_positive",
-            "severity": "High",
+            "severity": "critical",
             "summary": "SQLi targeting credentials",
             "recommendation": "block_source_ip",
             "reasoning": "Clear UNION SELECT targeting users table.",
@@ -923,7 +927,7 @@ def _make_cls_with_trace(
         alert_id=str(alert.flow_id) if alert.flow_id else "abc",
         timestamp=alert.timestamp_raw,
         classification="true_positive",
-        severity="High",
+        severity="critical",
         summary="x",
         recommendation="block_source_ip",
         reasoning="y",
@@ -1029,7 +1033,7 @@ def test_rule_based_suggestions_internal_docker_fp_cluster():
     )
     # Force the classification to be FP rather than the default TP fixture
     cls.classification = "likely_false_positive"
-    cls.severity = "Low"
+    cls.severity = "low"
     cls.recommendation = "continue_monitoring"
     incident = _make_incident([alert, alert, alert])  # 3 alerts, all FP
     sugg = _generate_rule_based_suggestions(
@@ -1214,7 +1218,7 @@ def test_rule_based_suggestions_work_in_single_shot_mode():
     cls = _make_cls_with_trace(alert)
     cls.reasoning_trace = None
     cls.classification = "likely_false_positive"
-    cls.severity = "Low"
+    cls.severity = "low"
     incident = _make_incident([alert, alert, alert], source_ip="172.18.0.2")  # 3 alerts, all FP
 
     env_entries = [{
@@ -1398,7 +1402,7 @@ def main():
         test_happy_path,
         test_stage1_invalid_json,
         test_stage1_retry_recovers,
-        test_stage1_bad_enum_values,
+        test_stage1_severity_dialect_normalisation,
         test_stage1_markdown_fences,
         test_stage1_provider_error_no_retry,
         test_partial_failure_mixed_results,
