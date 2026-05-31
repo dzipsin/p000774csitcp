@@ -310,9 +310,8 @@ repeat offender or part of a sustained attack campaign.
 - `IncidentManager._open_incidents` — open incidents this session.
 - `IncidentManager._recently_closed` — closed this session, still
   cached in memory.
-- The active storage backend's `list_reports()` — `ReportDatabase`
-  (SQLite, the default) or `ReportStorage` (JSON, the legacy
-  ablation backend).
+- `ReportDatabase.list_reports()` — every report persisted across all
+  sessions of the dashboard.
 
 **Return shape (with prior activity):**
 ```json
@@ -730,15 +729,14 @@ description          = "EXPECTED ATTACK TARGET — DVWA XSS training endpoint."
 classification_hint  = "expected_attack_target"
 
 [storage]
-backend                  = "sqlite"         # "sqlite" | "json"
 db_path                  = "data/reports.db"
 retention_days           = 90               # 0 = never expire
 cleanup_interval_seconds = 3600             # 0 = no auto cleanup
 ```
 
-`ReActAgent` consumes a `ModelProvider` (Ollama, Anthropic, llama.cpp)
-through the same `complete()` interface, so the agent itself is
-provider-agnostic.
+`ReActAgent` consumes a `ModelProvider` (currently Ollama) through the
+`complete()` / `complete_json()` interface, so the agent itself is
+backend-agnostic if a second local provider is wired later.
 
 ---
 
@@ -939,7 +937,7 @@ procedure.
 | 14 | Alert severity scale = critical / high / low (no medium) | Aligns with the custom rules' P1 / P2 / P3 priority tiers; Suricata severity 3+ maps to "low" |
 | 15 | SQLi rule pcres use `[\s+]` not `\s` for inter-keyword spacing | DVWA's GET form encodes spaces as `+` which Suricata's URI buffer does not decode; bare `\s` made the P1 UNION SELECT rule silently fail to fire |
 | 16 | SQLite hybrid schema (indexed columns + JSON blob, WAL mode) | Cheap queries on the columns you filter on, full payload available; standard pragmatic choice |
-| 17 | No JSON → SQLite migration tool | Fresh database on first run; the JSON backend is still selectable for ablation |
+| 17 | No JSON → SQLite migration tool | Fresh database on first run; the legacy JSON backend was retired after the migration. |
 | 18 | Teammate contributions integrated via cherry-pick (preserves authorship); cleanup in a separate follow-up commit | Capstone academic integrity; same motivation as no-AI-commit-trailers |
 | 19 | No AI commit trailers | Capstone academic integrity |
 

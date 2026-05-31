@@ -122,9 +122,10 @@ This branch carries everything you need to run the demo. Contains:
   `lookup_environment_context`, `get_attack_pattern_stats`)
 - Hybrid auto-enrichment (Option F, default on)
 - Template-v1 serializer + JSONSchema validation
-- SQLite persistence: `ReportDatabase` (drop-in for `ReportStorage`),
-  `[storage]` config section, `/api/incidents/*` history endpoints,
-  retention sweeper, hybrid indexed-columns + JSON-blob schema, WAL mode
+- SQLite persistence: `ReportDatabase` is the only storage layer (the
+  legacy JSON-file backend was retired). `[storage]` config section,
+  `/api/incidents/*` history endpoints, retention sweeper, hybrid
+  indexed-columns + JSON-blob schema, WAL mode
 - Custom Suricata rules in `lab/suricata/`:
   - `xss_alerts.rules` (58 rules, sids 1000001-1000058, author Shaina)
   - `sqli_alerts.rules` (13 rules, sids 1000101-1000113, author Sahil)
@@ -179,8 +180,7 @@ p000774csitcp/
     ├── report_generator.py          # Stage 1 + Stage 2 pipeline, rule-based
     │                                # suggestions, LLM filters, MITRE override
     ├── report_serializer.py         # template-v1 JSON serializer + schema
-    ├── report_db.py                 # ReportDatabase (SQLite backend) — Phase 10
-    ├── storage.py                   # ReportStorage (JSON file backend, legacy)
+    ├── report_db.py                 # ReportDatabase (SQLite — only backend)
     ├── models.py                    # AlertClassification, Incident, IncidentReport,
     │                                # ReasoningStep + all nested dataclasses
     ├── model_provider.py            # ModelProvider ABC + OllamaProvider
@@ -233,7 +233,6 @@ eve_log = "/var/log/suricata/eve.json"   # used inside the VM
 grouping_mode        = "per_actor"     # or per_attack_type
 time_window_minutes  = 2.0             # how long an incident stays open
 debounce_seconds     = 3.0
-reports_dir          = "reports"       # used only when storage.backend="json"
 sweep_interval_seconds = 10.0
 
 [analysis]
@@ -263,8 +262,7 @@ get_attack_pattern_stats      = true
 # (5 entries shipped: MariaDB, Docker bridge CIDR, host-only CIDR,
 #  DVWA SQLi endpoint, DVWA XSS endpoint)
 
-[storage]                              # Phase 10 — SQLite backend
-backend                  = "sqlite"    # "sqlite" | "json"
+[storage]                              # SQLite — only backend
 db_path                  = "data/reports.db"
 retention_days           = 90          # 0 = never expire
 cleanup_interval_seconds = 3600        # 0 = no automatic cleanup
@@ -376,20 +374,17 @@ python -m src.evaluation.run_combined_report `
 sessions — each run produces its own raw JSON, combined report
 reaggregates them.
 
-### Switching storage backends
+### Wiping storage
 
-```toml
-[storage]
-backend = "sqlite"   # default
-# backend = "json"  # legacy file-per-incident
-```
-
-`data/reports.db` is created automatically. To wipe and restart from
-clean:
+There is only one backend (`ReportDatabase`, SQLite at
+`data/reports.db`). To wipe and restart from clean:
 
 ```bash
 rm data/reports.db data/reports.db-wal data/reports.db-shm
 ```
+
+Schema is bootstrapped on first run, so the next start brings up an
+empty database.
 
 ---
 
@@ -469,17 +464,18 @@ names credentials.
 `Incident Report Template v1.pdf`. Field renames (`src_ip` → `source_ip`,
 `signature` → `alert_msg`, etc.), section duplication where the template
 puts the same data in two places, severity normalisation to 3 levels.
-Schema validation via `jsonschema`. ReportStorage / ReportDatabase /
-WebSocket push all emit this shape.
+Schema validation via `jsonschema`. ReportDatabase and the WebSocket push
+both emit this shape.
 
-### SQLite migration
+### SQLite persistence
 
-`ReportDatabase` is a drop-in replacement for `ReportStorage`
-(`save / list_reports / load_raw / clear_all`). Adds query methods
+`ReportDatabase` is the sole storage layer
+(`save / list_reports / load_raw / clear_all`) and adds query methods
 (`list_by_source_ip`, `list_by_attack_type`, `list_by_severity`,
-`aggregate_stats`, `cleanup_expired`) and a retention sweeper thread.
+`aggregate_stats`, `cleanup_expired`) plus a retention sweeper thread.
 Hybrid schema: indexed columns + JSON blob. WAL mode + thread-local
-connections. See `docs/PHASE_10_SQLITE.md` for the full design.
+connections. See `docs/PHASE_10_SQLITE.md` for the full design and
+`docs/HANDOFF.md` for the lock-in decisions.
 
 ### Custom Suricata rules (XSS + SQLi)
 
@@ -605,14 +601,13 @@ In priority order:
    split across days. Output: `eval_results/p6_combined_report.md` with
    ΔF1 column per design decision.
 
-2. **Dead-code audit** — first pass complete: dropped `ai_module.py`
-   (legacy batch path + `/api/analyse` endpoint + the "Analyse (Batch)"
-   button), dropped `AnthropicProvider` + `LlamaCppProvider` from
-   `model_provider.py` (capstone is Ollama-only), removed the unused
-   `IncidentManager.get_incident`, and routed `log_monitor.py` prints
-   through the stdlib logger. Pending: migrate the JSON-backed tests
-   off `ReportStorage` so `storage.py` can go (the JSON backend is
-   kept on disk as the SQLite-ablation fallback otherwise).
+2. **Dead-code audit** — complete. Dropped `ai_module.py` (legacy
+   batch path + `/api/analyse` endpoint + the "Analyse (Batch)"
+   button), `AnthropicProvider` + `LlamaCppProvider` from
+   `model_provider.py` (capstone is Ollama-only), the unused
+   `IncidentManager.get_incident`, and `storage.py` (the JSON-file
+   backend; tests now use `ReportDatabase` against a tempfile path).
+   Also routed `log_monitor.py` prints through the stdlib logger.
 
 3. **Docstring + WHY-comment audit** — module-level docstrings on public
    classes / functions so the code can be picked up cold by next year's
@@ -704,7 +699,6 @@ merge of `feature/sqlite-persistence → main` brings the whole thing in.
 | Dashboard always shows FP=0 | Older JS cached | Hard-refresh (Ctrl+Shift+R). Fix was committed `7f42d3c` |
 | Stage 2 picks wrong MITRE tactic | LLM adherence drift | MITRE override handles common cases; check console log for `Stage 2 MITRE tactic overridden:` line |
 | LLM emits "let me check ..." after enrichment data is already in the prompt | Stylistic prompt adherence | Tightened in `2ff1a1d`. If still happens occasionally, accept — it's qwen2.5:3b's ceiling |
-| `python src/app.py` shows `Storage backend: SQLite at ...` but you wanted JSON | `[storage].backend = "sqlite"` (default) | Set `backend = "json"` in `app.config` and restart |
 | `data/reports.db` corrupted or stuck | Crash mid-write | `rm data/reports.db*` (all WAL/SHM sidecars) — fresh schema on next start |
 | Evaluation harness `Dashboard not reachable` | App on host isn't running, or port differs | Verify `python src/app.py` is alive on :5000 |
 | Combined report says "no runs matched" | Eval runs missing `--config-dim` | Re-run with the flag; or manually edit the raw JSON to add `config_dimensions.step` |

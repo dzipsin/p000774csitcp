@@ -489,8 +489,7 @@ auto_enrichment          = true      # hybrid Option F: deterministic pre-LLM to
 
 ```toml
 [storage]
-backend = "sqlite"                # "sqlite" | "json"
-db_path = "data/reports.db"       # sqlite only
+db_path = "data/reports.db"       # SQLite file; created if missing
 retention_days = 90               # 0 disables retention sweeper
 cleanup_interval_seconds = 3600
 ```
@@ -565,8 +564,7 @@ p000774csitcp/
 │   ├── report_generator.py          # Stage 2 narrative + rule-based suggestions +
 │   │                                # 3-layer LLM filter + MITRE tactic override
 │   ├── report_serializer.py         # template-v1 JSON shape + JSONSchema validation
-│   ├── storage.py                   # JSON-file backend (legacy / ablation fallback)
-│   ├── report_db.py                 # SQLite backend (default): WAL, thread-local,
+│   ├── report_db.py                 # SQLite persistence: WAL, thread-local,
 │   │                                # retention sweeper, history queries by IP/attack/severity
 │   │
 │   ├── web_server.py                # Flask + Socket.IO dashboard server

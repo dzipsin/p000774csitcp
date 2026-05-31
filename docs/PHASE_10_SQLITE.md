@@ -1,15 +1,15 @@
-# Phase 10 — SQLite persistence migration
+# Phase 10 — SQLite persistence
 
 The previous backend wrote one JSON file per incident into `reports/`.
 That worked but lost most history value on every restart and didn't
-support cross-run queries cheaply. Phase 10 replaces it with a SQLite
+support cross-run queries cheaply. Phase 10 replaced it with a SQLite
 database (`data/reports.db`) using a hybrid schema — indexed columns
 for the fields commonly filtered or sorted on, plus a `full_report_json`
 blob containing the entire template-v1 payload.
 
-The change is opt-in via `[storage].backend` in `app.config`. Default
-on this branch is `"sqlite"`; setting it back to `"json"` restores the
-legacy behaviour for back-compat.
+The JSON backend was retained as an ablation switch for a while but
+later retired once the migration settled. SQLite is now the only
+storage layer; there is no `[storage].backend` knob.
 
 ## What changed
 
@@ -76,7 +76,6 @@ the JSON blob for every report.
 
 ```toml
 [storage]
-backend                  = "sqlite"          # "sqlite" | "json"
 db_path                  = "data/reports.db"
 retention_days           = 90                # 0 = never expire
 cleanup_interval_seconds = 3600              # 0 = no automatic cleanup
@@ -90,9 +89,10 @@ project artefact.
 
 ## API additions
 
-Five new endpoints. They depend on the SQLite backend; with
-`backend = "json"` they return `503` with a helpful message rather than
-silently failing.
+Five new endpoints, all backed by ReportDatabase query methods. The
+`_require_query_backend` guard checks `hasattr` on the storage object
+before each call, so swapping in a stand-in storage that doesn't
+implement one of the methods degrades to `503` rather than crashing.
 
 | Method | Path | Returns |
 |---|---|---|
@@ -176,28 +176,11 @@ no effect on the repository.
   ```
   Next run bootstraps a fresh schema.
 
-## Roll back to JSON
-
-If something goes wrong with the SQLite backend and a demo is imminent:
-
-1. Edit `app.config`:
-   ```toml
-   [storage]
-   backend = "json"
-   ```
-2. Restart the app.
-3. JSON files in `reports/` are read again. The SQLite file is left in
-   place (untouched by JSON backend) so you can roll forward later.
-
-The two backends share the same public surface (`save`, `list_reports`,
-`load_raw`, `clear_all`), so the rest of the pipeline doesn't notice.
-The five new SQLite-only endpoints return `503` under JSON.
-
 ## What this does NOT change
 
 - Report content / template_v1 schema — unchanged.
 - Dashboard rendering — reads the same JSON shape from `/api/incidents`.
-- ReportGenerator — saves to `storage` the same way; the type of
-  `storage` is the only difference.
+- ReportGenerator — saves to `storage` the same way as before; only the
+  concrete storage class changed.
 - Evaluation harness — reads `/api/incidents`, format identical.
-- Existing test suites — still pass on either backend.
+- Existing test suites — all green against ReportDatabase.
