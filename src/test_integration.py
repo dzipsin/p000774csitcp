@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from log_monitor import AlertRecord
 from incident_manager import IncidentManager
 from report_generator import ReportGenerator
-from storage import ReportStorage
+from report_db import ReportDatabase
 from model_provider import ModelProvider, ProviderType
 
 
@@ -122,7 +122,10 @@ def test_pipeline_basic_flow():
 
     storage_dir = tempfile.mkdtemp(prefix="int-test-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
 
         manager = IncidentManager(
             grouping_mode="per_actor",
@@ -159,9 +162,9 @@ def test_pipeline_basic_flow():
         assert report.incident_summary.classification_counts["true_positive"] == 3
         assert report.incident_summary.overall_severity == "High"
 
-        # File should be on disk
-        files = list(Path(storage_dir).glob("inc_*.json"))
-        assert len(files) == 1, f"Expected 1 file, got {len(files)}"
+        # Storage should hold exactly the one incident we generated
+        stored = storage.list_reports()
+        assert len(stored) == 1, f"Expected 1 stored report, got {len(stored)}"
 
         manager.stop(close_open=True)
         time.sleep(0.5)  # let final regen flush
@@ -183,7 +186,10 @@ def test_pipeline_force_regenerate():
 
     storage_dir = tempfile.mkdtemp(prefix="int-test-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         manager = IncidentManager(
             grouping_mode="per_actor",
             time_window_minutes=5.0,
@@ -228,7 +234,10 @@ def test_pipeline_sweeper_closes_incident():
 
     storage_dir = tempfile.mkdtemp(prefix="int-test-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         manager = IncidentManager(
             grouping_mode="per_actor",
             time_window_minutes=0.03,   # ~2 seconds
@@ -275,7 +284,10 @@ def test_pipeline_parallel_incidents():
 
     storage_dir = tempfile.mkdtemp(prefix="int-test-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         manager = IncidentManager(
             grouping_mode="per_actor",
             time_window_minutes=0.5,
@@ -320,7 +332,10 @@ def test_repeat_offender_flag():
 
     storage_dir = tempfile.mkdtemp(prefix="int-test-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         manager = IncidentManager(
             grouping_mode="per_actor",
             time_window_minutes=0.02,   # ~1 second
@@ -442,7 +457,10 @@ def test_pipeline_react_agent_path():
 
     storage_dir = tempfile.mkdtemp(prefix="int-test-react-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         manager = IncidentManager(
             grouping_mode="per_actor",
             time_window_minutes=5.0,

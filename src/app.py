@@ -29,7 +29,6 @@ from web_server import Server
 from model_provider import ModelConfig, ProviderType, create_provider
 from incident_manager import IncidentManager
 from report_generator import ReportGenerator
-from storage import ReportStorage
 from report_db import ReportDatabase
 
 # ---------------------------------------------------------------------------
@@ -44,7 +43,7 @@ logging.basicConfig(
 
 for mod in (
     "model_provider", "log_monitor",
-    "incident_manager", "report_generator", "storage", "web_server",
+    "incident_manager", "report_generator", "report_db", "web_server",
 ):
     logging.getLogger(mod).setLevel(logging.INFO)
 
@@ -94,7 +93,6 @@ POLL_INTERVAL = float(_get("monitor", "poll_interval", 0.5))
 GROUPING_MODE         = _get("incident", "grouping_mode", "per_actor")
 TIME_WINDOW_MINUTES   = float(_get("incident", "time_window_minutes", 2.0))
 DEBOUNCE_SECONDS      = float(_get("incident", "debounce_seconds", 3.0))
-REPORTS_DIR           = _get("incident", "reports_dir", "reports")
 SWEEP_INTERVAL        = float(_get("incident", "sweep_interval_seconds", 10.0))
 
 # Sanity-check grouping_mode (IncidentManager would raise otherwise, but nicer
@@ -179,39 +177,25 @@ model_config = ModelConfig(
 monitor = LogMonitor(eve_log_path=EVE_LOG, poll_interval=POLL_INTERVAL)
 server  = Server(host=HOST, port=PORT, secret_key=SECRET)
 
-# Resolve reports_dir relative to repo root (parent of src/) unless absolute
-_reports_path = Path(REPORTS_DIR)
-if not _reports_path.is_absolute():
-    _reports_path = Path(__file__).parent.parent / _reports_path
-
-# Storage backend (Phase 10): SQLite preferred, JSON files retained for
-# back-compat. Resolved via [storage].backend in app.config.
+# Storage: SQLite-backed ReportDatabase. The legacy JSON-file backend was
+# dropped because the SQLite layer covered every consumer with one less moving
+# part. Schema bootstrap is idempotent; the file is created if missing.
 _storage_cfg = _cfg.get("storage", {}) or {}
-STORAGE_BACKEND = str(_storage_cfg.get("backend", "sqlite")).lower()
 STORAGE_DB_PATH = str(_storage_cfg.get("db_path", "data/reports.db"))
 STORAGE_RETENTION_DAYS = int(_storage_cfg.get("retention_days", 90) or 0)
 STORAGE_CLEANUP_INTERVAL = float(_storage_cfg.get("cleanup_interval_seconds", 3600) or 0.0)
 
-if STORAGE_BACKEND == "sqlite":
-    _db_path = Path(STORAGE_DB_PATH)
-    if not _db_path.is_absolute():
-        _db_path = Path(__file__).parent.parent / _db_path
-    storage = ReportDatabase(
-        db_path=str(_db_path),
-        retention_days=STORAGE_RETENTION_DAYS,
-    )
-    log.info(
-        "Storage backend: SQLite at %s (retention=%d days)",
-        _db_path, STORAGE_RETENTION_DAYS,
-    )
-else:
-    if STORAGE_BACKEND != "json":
-        log.warning(
-            "Unknown storage.backend '%s'; defaulting to json",
-            STORAGE_BACKEND,
-        )
-    storage = ReportStorage(str(_reports_path))
-    log.info("Storage backend: JSON files at %s", storage.directory)
+_db_path = Path(STORAGE_DB_PATH)
+if not _db_path.is_absolute():
+    _db_path = Path(__file__).parent.parent / _db_path
+storage = ReportDatabase(
+    db_path=str(_db_path),
+    retention_days=STORAGE_RETENTION_DAYS,
+)
+log.info(
+    "Storage: SQLite at %s (retention=%d days)",
+    _db_path, STORAGE_RETENTION_DAYS,
+)
 
 # Incident manager starts with no callback; we set it after creating the generator
 incident_manager = IncidentManager(

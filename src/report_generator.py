@@ -22,8 +22,7 @@ Design principles:
 Depends on:
   models.*                     — dataclasses
   model_provider.ModelProvider — LLM backend abstraction
-  storage.ReportStorage        — persistence (JSON file backend)
-  report_db.ReportDatabase     — persistence (SQLite backend, default)
+  report_db.ReportDatabase     — SQLite-backed persistence
 
 The frontend consumes the per-incident output of this module via
 /api/incidents/*; there is no batch-mode classification path any more.
@@ -54,7 +53,7 @@ from models import (
     InformationExposureDescription,
     extract_attack_type,
 )
-from storage import ReportStorage
+from report_db import ReportDatabase
 
 log = logging.getLogger(__name__)
 
@@ -654,7 +653,7 @@ class ReportGenerator:
 
         generator = ReportGenerator(
             provider=my_ollama_provider,
-            storage=ReportStorage("reports"),
+            storage=ReportDatabase(db_path="data/reports.db"),
             include_lab_context=True,
             summary_mode="llm",
         )
@@ -670,7 +669,7 @@ class ReportGenerator:
     def __init__(
         self,
         provider: ModelProvider,
-        storage: Optional[ReportStorage] = None,
+        storage: Optional[ReportDatabase] = None,
         include_lab_context: bool = True,
         summary_mode: str = "llm",
         max_retries: int = 1,
@@ -682,8 +681,8 @@ class ReportGenerator:
     ):
         """
         Args:
-            provider: LLM backend (Ollama, Anthropic, llama.cpp)
-            storage: ReportStorage for persisting reports (None = don't persist)
+            provider: local LLM backend (currently OllamaProvider)
+            storage: ReportDatabase for persisting reports (None = don't persist)
             include_lab_context: include Docker lab details in Stage 1 prompt
             summary_mode: "llm" or "template" for Stage 2
             max_retries: retries per LLM call on parse/validation failures

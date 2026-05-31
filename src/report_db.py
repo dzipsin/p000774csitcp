@@ -1,11 +1,11 @@
 """
 report_db.py - SQLite-backed persistence for IncidentReports.
 
-Drop-in replacement for storage.ReportStorage. Preserves the same public
-interface (`save`, `list_reports`, `load_raw`, `clear_all`) so the rest
-of the codebase keeps working with no other changes. Adds new query
-methods on top for cross-run history features that the JSON-file
-backend couldn't support cheaply.
+The single storage backend for the dashboard, evaluation harness, and agent
+history tools. Exposes `save`, `list_reports`, `load_raw`, `clear_all` for
+the core CRUD path and extra query methods (`list_by_source_ip`,
+`list_by_attack_type`, `list_by_severity`, `aggregate_stats`,
+`cleanup_expired`) for cross-run history features.
 
 Design decisions (locked in docs/HANDOFF.md):
   - Hybrid schema: indexed columns for the fields commonly filtered or
@@ -128,7 +128,7 @@ CREATE INDEX IF NOT EXISTS idx_alerts_signature   ON alerts(signature_id);
 class ReportDatabase:
     """SQLite-backed storage for IncidentReports.
 
-    Public methods mirroring storage.ReportStorage:
+    Core CRUD methods:
         save(report)       -> Optional[Path]    (returns db_path on success)
         list_reports()     -> List[dict]
         load_raw(id)       -> Optional[dict]
@@ -211,19 +211,19 @@ class ReportDatabase:
         log.debug("Schema v%d bootstrapped at %s", _SCHEMA_VERSION, self._db_path)
 
     # ------------------------------------------------------------------
-    # Drop-in replacement for ReportStorage
+    # Core CRUD
     # ------------------------------------------------------------------
 
     @property
     def directory(self) -> Path:
-        """Pretend to be a directory for legacy code that logs storage path.
-        Returns the directory containing the SQLite file."""
+        """The directory containing the SQLite file. Kept so log lines that
+        want to print "storage at X" stay one-liners."""
         return self._db_path.parent
 
     def save(self, report: IncidentReport) -> Optional[Path]:
         """Upsert a report. Newer reports for the same incident_id replace
-        older ones (preserves the existing ReportStorage semantics where
-        save() is also used for in-place updates).
+        older ones — `save()` is also the in-place update path used when an
+        incident is regenerated.
 
         Returns the database path on success, None on failure. Errors are
         logged but not raised so the pipeline survives a transient DB error.
@@ -368,9 +368,8 @@ class ReportDatabase:
     def list_reports(self) -> List[dict]:
         """Return all stored reports as full template_v1 dicts, newest first.
 
-        Same return shape as ReportStorage.list_reports() so the existing
-        consumers (evaluation harness, dashboard cache, get_alert_history
-        tool) work unchanged.
+        Consumed by the evaluation harness, the dashboard cache rebuilder,
+        and the get_alert_history agent tool.
         """
         try:
             conn = self._connection()
@@ -409,8 +408,8 @@ class ReportDatabase:
     def clear_all(self) -> int:
         """Delete every incident (and via cascade, every alert).
 
-        Returns the count of incidents removed. Honest behaviour matches
-        ReportStorage — operator-triggered Clear button.
+        Returns the count of incidents removed. Backs the operator-triggered
+        "Clear Incidents" button on the dashboard.
         """
         try:
             with self._txn() as conn:

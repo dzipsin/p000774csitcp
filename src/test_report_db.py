@@ -436,21 +436,24 @@ def test_retention_sweeper_skips_when_retention_zero():
         shutil.rmtree(d, ignore_errors=True)
 
 
-def test_drop_in_compat_interface():
-    print("\n=== Test 12: drop-in compat with ReportStorage public interface ===")
+def test_public_interface_smoke():
+    print("\n=== Test 12: public storage interface smoke ===")
+    # ReportGenerator + the web layer rely on these four methods plus the
+    # `directory` property staying callable. Asserting it here keeps a
+    # regression from silently breaking those consumers if a refactor drops
+    # one of them.
     d = _tmp_dir()
     try:
         db = ReportDatabase(db_path=str(d / "reports.db"))
-        # Must expose: save, list_reports, load_raw, clear_all, directory
         assert callable(getattr(db, "save", None))
         assert callable(getattr(db, "list_reports", None))
         assert callable(getattr(db, "load_raw", None))
         assert callable(getattr(db, "clear_all", None))
         assert getattr(db, "directory", None) is not None
-        # save() returns a Path (or None on failure) — matches ReportStorage
+        # save() returns the database Path on success.
         path = db.save(_make_report(incident_id="compat1"))
         assert isinstance(path, Path)
-        print("    PASS: interface matches ReportStorage")
+        print("    PASS: public interface intact")
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -474,7 +477,7 @@ def main():
         test_cleanup_disabled_when_retention_zero,
         test_retention_sweeper_starts_and_stops,
         test_retention_sweeper_skips_when_retention_zero,
-        test_drop_in_compat_interface,
+        test_public_interface_smoke,
     ]
     failed = []
     for t in tests:

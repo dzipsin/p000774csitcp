@@ -184,7 +184,7 @@ def _synthetic_alert_for(scenario) -> AlertRecord:
 def test_scenarios_fire_and_correlate():
     print("\n=== Test 1: Synthetic fire -> IncidentManager -> ReportGenerator -> correlate ===")
 
-    from storage import ReportStorage
+    from report_db import ReportDatabase
     import tempfile
 
     storage_dir = tempfile.mkdtemp(prefix="eval-test-")
@@ -203,9 +203,15 @@ def test_scenarios_fire_and_correlate():
         def capture(report):
             reports_captured.append(report)
 
+        # retention_days=0 disables the background sweeper; we don't want a
+        # daemon thread firing inside a short-lived test.
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         generator = ReportGenerator(
             provider=provider,
-            storage=ReportStorage(storage_dir),
+            storage=storage,
             summary_mode="template",  # avoid relying on the mock for stage 2
             max_retries=0,
             on_report_ready=capture,

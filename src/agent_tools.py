@@ -2,12 +2,12 @@
 agent_tools.py - Tool implementations for the ReAct triage agent.
 
 Each tool is exposed via a factory function that captures the application
-state it needs (IncidentManager, ReportStorage, configuration) in a closure
+state it needs (IncidentManager, ReportDatabase, configuration) in a closure
 and returns a ToolDefinition ready for registration with the ToolRegistry.
 
 Tools are pure read functions. They never mutate state. They never make
 external network calls. All data comes from existing app structures
-(in-memory incidents + persisted JSON reports + config).
+(in-memory incidents + persisted SQLite reports + config).
 
 Public surface:
     make_alert_history_tool(incident_manager, storage) -> ToolDefinition

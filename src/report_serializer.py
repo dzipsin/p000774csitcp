@@ -3,7 +3,7 @@ report_serializer.py - Template-compliant serialization for IncidentReport.
 
 Emits JSON matching the "Incident Report Template v1" specification (see
 Incident Report Template v1.pdf at the project root). Used by:
-    - ReportStorage.save() to write template-shape JSON to disk
+    - ReportDatabase.save() to write the template-shape blob to SQLite
     - Server.push_incident_report() to publish template-shape JSON to
       dashboard / WebSocket clients / /api/incidents endpoint
 

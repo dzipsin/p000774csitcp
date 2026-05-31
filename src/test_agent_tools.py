@@ -93,7 +93,9 @@ def _make_alert(
 
 
 class _FakeStorage:
-    """Minimal stand-in for ReportStorage.list_reports()."""
+    """Minimal stand-in that satisfies the same list_reports() shape as
+    ReportDatabase — lets the agent-tool tests run without spinning up a
+    real SQLite file."""
 
     def __init__(self, reports: List[Dict[str, Any]] = None):
         self._reports = list(reports or [])
@@ -108,7 +110,7 @@ def _make_report_dict(
     alerts: List[Dict[str, Any]],
     generated_at: str = "2026-05-15T10:00:00+00:00",
 ) -> Dict[str, Any]:
-    """Build a minimal report dict in the shape ReportStorage.list_reports() returns."""
+    """Build a minimal report dict in the shape ReportDatabase.list_reports() returns."""
     return {
         "incident_summary": {
             "incident_id": incident_id,

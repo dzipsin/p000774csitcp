@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from log_monitor import AlertRecord
 from models import Incident, extract_attack_type
 from model_provider import ModelProvider, ProviderType
-from storage import ReportStorage
+from report_db import ReportDatabase
 from report_generator import (
     ReportGenerator,
     _override_mitre_tactic,
@@ -234,7 +234,10 @@ def test_happy_path():
     provider = MockProvider()
     storage_dir = tempfile.mkdtemp(prefix="reports-test-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         gen = ReportGenerator(provider=provider, storage=storage)
 
         sqli = _make_alert()
@@ -258,13 +261,11 @@ def test_happy_path():
         assert report.information_exposure.exposure_detected is True
         assert len(report.information_exposure.indicators_of_compromise) >= 2
 
-        # Verify the file was written
-        written = list(Path(storage_dir).glob("inc_*.json"))
-        assert len(written) == 1, f"Expected 1 file, got {len(written)}"
-
-        # Verify it's valid JSON
-        with open(written[0]) as f:
-            loaded = json.load(f)
+        # Verify the report landed in storage and round-trips intact
+        stored = storage.list_reports()
+        assert len(stored) == 1, f"Expected 1 stored report, got {len(stored)}"
+        loaded = storage.load_raw(incident.incident_id)
+        assert loaded is not None, "load_raw returned None for the saved incident"
         assert loaded["incident_summary"]["incident_id"] == incident.incident_id
 
         print("    PASS: happy path produced complete report with both stages")
@@ -506,25 +507,30 @@ def test_empty_incident():
     print("    PASS: empty incident produced empty report, no crash")
 
 
-def test_storage_atomic_write():
-    print("\n=== Test 14: Storage writes atomically, no .tmp files left behind ===")
+def test_storage_save_is_durable():
+    print("\n=== Test 14: Storage save() persists exactly one row per incident ===")
 
+    # SQLite handles atomicity via its own WAL transactions, so we don't try
+    # to assert anything about temp files on disk (that was a JSON-backend
+    # concern). The behavioural contract for ReportGenerator is "after
+    # generate() returns, the report is in storage and retrievable" — that's
+    # what we check here.
     storage_dir = tempfile.mkdtemp(prefix="reports-atomic-")
     try:
         provider = MockProvider()
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         gen = ReportGenerator(provider=provider, storage=storage)
 
         incident = _make_incident([_make_alert()])
         gen.generate(incident)
 
-        all_files = list(Path(storage_dir).iterdir())
-        final_files = [f for f in all_files if f.suffix == ".json" and not f.name.endswith(".tmp")]
-        tmp_files = [f for f in all_files if ".tmp" in f.name]
-
-        assert len(final_files) == 1, f"Expected 1 final file, got {len(final_files)}"
-        assert len(tmp_files) == 0, f"Found leftover tmp files: {tmp_files}"
-        print("    PASS: atomic write left exactly 1 final file, 0 tmp files")
+        rows = storage.list_reports()
+        assert len(rows) == 1, f"Expected 1 stored row, got {len(rows)}"
+        assert rows[0]["incident_summary"]["incident_id"] == incident.incident_id
+        print("    PASS: save() produced exactly one retrievable row")
     finally:
         shutil.rmtree(storage_dir, ignore_errors=True)
 
@@ -535,7 +541,10 @@ def test_storage_clear_all():
     storage_dir = tempfile.mkdtemp(prefix="reports-clear-")
     try:
         provider = MockProvider()
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         gen = ReportGenerator(provider=provider, storage=storage)
 
         # Create 3 different incidents (use distinct prefixes — storage keys
@@ -545,14 +554,14 @@ def test_storage_clear_all():
             inc.incident_id = f"{prefix}-test"
             gen.generate(inc)
 
-        before = list(Path(storage_dir).glob("inc_*.json"))
-        assert len(before) == 3
+        before = storage.list_reports()
+        assert len(before) == 3, f"Expected 3 stored before clear, got {len(before)}"
 
         count = storage.clear_all()
-        after = list(Path(storage_dir).glob("inc_*.json"))
+        after = storage.list_reports()
 
         assert count == 3, f"Expected 3 deleted, got {count}"
-        assert len(after) == 0, f"Expected 0 files after clear, got {len(after)}"
+        assert len(after) == 0, f"Expected 0 stored after clear, got {len(after)}"
         print(f"    PASS: clear_all deleted {count} reports")
     finally:
         shutil.rmtree(storage_dir, ignore_errors=True)
@@ -576,15 +585,16 @@ def test_unicode_in_response():
     incident = _make_incident([_make_alert()])
     storage_dir = tempfile.mkdtemp(prefix="reports-unicode-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         gen._storage = storage
         report = gen.generate(incident)
 
-        # Read the file back to ensure UTF-8 survived the round-trip
-        written = list(Path(storage_dir).glob("inc_*.json"))[0]
-        with open(written, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-
+        # Round-trip through storage to ensure UTF-8 survived the SQLite blob
+        loaded = storage.load_raw(incident.incident_id)
+        assert loaded is not None, "load_raw returned None for the unicode incident"
         assert "中国" in loaded["alert_analyses"][0]["likely_intent"], (
             "Unicode lost in storage round-trip"
         )
@@ -1398,7 +1408,7 @@ def main():
         test_rule_based_iocs_and_data_fields,
         test_rule_based_data_sensitivity,
         test_empty_incident,
-        test_storage_atomic_write,
+        test_storage_save_is_durable,
         test_storage_clear_all,
         test_unicode_in_response,
         test_prompt_injection_in_payload,

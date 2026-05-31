@@ -145,8 +145,8 @@ class Server:
 
         Called from ReportGenerator's worker thread after a report is generated.
 
-        Emits the template-v1-compliant JSON shape so the on-disk reports
-        (via ReportStorage), the cache, the /api/incidents endpoint, and the
+        Emits the template-v1-compliant JSON shape so the persisted reports
+        (via ReportDatabase), the cache, the /api/incidents endpoint, and the
         WebSocket push all use one consistent format. Internal extras
         (incident_id, classification per alert, reasoning trace) are
         preserved alongside template-required fields.
@@ -320,12 +320,12 @@ class Server:
             })
 
         # ------------------------------------------------------------------
-        # Routes: incident history queries (Phase 10 — SQLite-backed)
+        # Routes: incident history queries (SQLite-backed)
         #
-        # These endpoints depend on the SQLite ReportDatabase. With the
-        # legacy JSON ReportStorage backend they return 503 — the routes
-        # are still registered so the frontend doesn't have to detect
-        # backend capability differently.
+        # These endpoints depend on the ReportDatabase query methods. The
+        # _require_query_backend guard below still uses hasattr() so an
+        # alternate backend without one of the methods would degrade to 503
+        # instead of crashing — defensive but cheap.
         # ------------------------------------------------------------------
 
         def _require_query_backend(method_name: str):
