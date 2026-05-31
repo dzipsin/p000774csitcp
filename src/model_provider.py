@@ -1,21 +1,18 @@
 """
-model_provider.py - Unified interface for local and remote LLM backends
+model_provider.py - Local LLM backend interface
 
-Provides a single ModelProvider abstraction so the rest of the codebase never
-has to know whether it is talking to Anthropic's API, a local Ollama instance,
-or a llama.cpp HTTP server.
+Provides a ModelProvider abstraction so the rest of the codebase never has to
+know which local model server it is talking to. Currently only Ollama is
+wired in; the abstract base + factory are kept so a second local backend
+(llama.cpp, vLLM, etc.) can drop in without touching every call site.
+
+Capstone constraint: no paid / remote APIs. Local-only.
 
 Public surface:
   ModelConfig           all provider configuration in one dataclass
   ModelProvider         abstract base; one method: .complete(prompt) -> str
-  AnthropicProvider     remote: Anthropic Messages API
   OllamaProvider        local: Ollama REST API  (http://localhost:11434)
-  LlamaCppProvider      local: llama.cpp HTTP server (http://localhost:8080)
   create_provider(cfg)  factory; returns the right provider for a ModelConfig
-
-Configuration:
-  The simplest integration is via environment variables fed into ModelConfig.
-  See ModelConfig field docstrings for the expected variable names.
 """
 
 from __future__ import annotations
@@ -33,10 +30,12 @@ log = logging.getLogger(__name__)
 
 
 class ProviderType(str, Enum):
-    """Enum of Provider Names"""
-    ANTHROPIC  = "anthropic"    # Remote
-    OLLAMA     = "ollama"       # Local
-    LLAMACPP   = "llamacpp"     # Local
+    """Enum of supported provider names.
+
+    Only OLLAMA ships today. The enum is kept (rather than a bare string)
+    so config validation in app.py catches typos at startup time.
+    """
+    OLLAMA = "ollama"       # Local
 
 
 @dataclass
@@ -50,14 +49,12 @@ class ModelConfig:
     Environment-variable defaults are resolved at instantiation time.
     """
 
-    provider: ProviderType = ProviderType.ANTHROPIC
+    provider: ProviderType = ProviderType.OLLAMA
 
     # --- Shared ---
     model: str = "llama3"
     """Model identifier.
-    Anthropic  : e.g. 'claude-opus-4-6', 'claude-sonnet-4-6'
-    Ollama     : e.g. 'llama3', 'mistral', 'gemma2'
-    llama.cpp  : ignored (model is loaded at server start)
+    Ollama: e.g. 'qwen2.5:3b', 'llama3.2', 'mistral'.
     """
 
     max_tokens: int = 1024
@@ -69,15 +66,9 @@ class ModelConfig:
     system_prompt: Optional[str] = None
     """Optional system / instruction prompt prepended to every request."""
 
-    # --- Remote ---
-    api_key: str = field(default_factory=lambda: os.getenv("API_KEY", ""))
-    """API key. Defaults to API_KEY env var."""
-
-    # --- Local ---
+    # --- Local server ---
     base_url: str = field(default_factory=lambda: os.getenv("LOCAL_MODEL_URL", ""))
-    """Base URL of the local model server.
-    Ollama    default : http://localhost:11434
-    llama.cpp default : http://localhost:8080
+    """Base URL of the local model server (default http://localhost:11434).
     Override via LOCAL_MODEL_URL env var.
     """
 
@@ -133,75 +124,6 @@ class ModelProvider(ABC):
     @abstractmethod
     def model_name(self) -> str:
         """The model identifier string (e.g. 'llama3.2', 'claude-sonnet-4-6')."""
-
-
-class AnthropicProvider(ModelProvider):
-    """Calls the Anthropic Messages API.
-
-    Requires:
-        pip install anthropic
-
-    The ``anthropic`` package is imported lazily so the rest of the codebase
-    does not break when it is not installed.
-    """
-
-    def __init__(self, config: ModelConfig):
-        self._config = config
-        if not config.api_key:
-            raise ValueError(
-                "AnthropicProvider requires an API key. "
-                "Set API_KEY or pass api_key in ModelConfig."
-            )
-        try:
-            import anthropic  # type: ignore[import-not-found]
-        except ImportError as e:
-            raise RuntimeError(
-                "anthropic package not installed. Run: pip install anthropic"
-            ) from e
-        self._client = anthropic.Anthropic(api_key=config.api_key)
-
-    @property
-    def provider_type(self) -> ProviderType:
-        return ProviderType.ANTHROPIC
-
-    @property
-    def model_name(self) -> str:
-        return self._config.model
-
-    def complete(self, prompt: str) -> str:
-        cfg = self._config
-        kwargs: dict = dict(
-            model=cfg.model,
-            max_tokens=cfg.max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        if cfg.system_prompt:
-            kwargs["system"] = cfg.system_prompt
-        if cfg.temperature is not None:
-            kwargs["temperature"] = cfg.temperature
-
-        message = self._client.messages.create(**kwargs)
-        return message.content[0].text
-
-    def complete_json(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-    ) -> str:
-        cfg = self._config
-        kwargs: dict = dict(
-            model=cfg.model,
-            max_tokens=cfg.max_tokens,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        sys_prompt = system_prompt or cfg.system_prompt
-        if sys_prompt:
-            kwargs["system"] = sys_prompt
-        if cfg.temperature is not None:
-            kwargs["temperature"] = cfg.temperature
-
-        message = self._client.messages.create(**kwargs)
-        return message.content[0].text
 
 
 class OllamaProvider(ModelProvider):
@@ -301,93 +223,9 @@ class OllamaProvider(ModelProvider):
         )
 
 
-class LlamaCppProvider(ModelProvider):
-    """Calls a llama.cpp HTTP server (--server mode).
-
-    Start the server with:
-        ./llama-server -m model.gguf --port 8080
-
-    API reference: https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md
-    """
-
-    def __init__(self, config: ModelConfig):
-        if not config.base_url:
-            raise ValueError(
-                "LlamaCppProvider requires a base_url. "
-                "Set base_url in [model.llamacpp] in app.config or via LOCAL_MODEL_URL."
-            )
-        self._config = config
-        self._base = config.base_url.rstrip("/")
-
-    @property
-    def provider_type(self) -> ProviderType:
-        return ProviderType.LLAMACPP
-
-    @property
-    def model_name(self) -> str:
-        return self._config.model
-
-    def _call_llamacpp(
-        self,
-        prompt: str,
-        json_mode: bool = False,
-        system_prompt: Optional[str] = None,
-    ) -> str:
-        """Internal method that handles both text and JSON mode requests."""
-        cfg = self._config
-
-        sys = system_prompt if system_prompt is not None else cfg.system_prompt
-        full_prompt = prompt
-        if sys:
-            full_prompt = f"{sys}\n\n{prompt}"
-
-        payload: dict = {
-            "prompt": full_prompt,
-            "n_predict": cfg.max_tokens,
-            "temperature": cfg.temperature,
-            "stop": [],
-        }
-
-        if json_mode:
-            payload["json_schema"] = {"type": "object"}
-
-        data = _json.dumps(payload).encode()
-        url = f"{self._base}/completion"
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=cfg.request_timeout) as resp:
-                body = _json.loads(resp.read())
-        except Exception as e:
-            raise RuntimeError(f"llama.cpp request to {url} failed: {e}") from e
-
-        try:
-            return body["content"]
-        except (KeyError, TypeError) as e:
-            raise RuntimeError(f"Unexpected llama.cpp response shape: {body}") from e
-
-    def complete(self, prompt: str) -> str:
-        return self._call_llamacpp(prompt, json_mode=False)
-
-    def complete_json(
-        self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-    ) -> str:
-        """Use llama.cpp's JSON schema mode for structured output."""
-        return self._call_llamacpp(
-            prompt, json_mode=True, system_prompt=system_prompt,
-        )
-
-
+# Provider registry. Add new entries when wiring additional local backends.
 _PROVIDER_MAP: Dict[ProviderType, Type[ModelProvider]] = {
-    ProviderType.ANTHROPIC: AnthropicProvider,
-    ProviderType.OLLAMA:    OllamaProvider,
-    ProviderType.LLAMACPP:  LlamaCppProvider,
+    ProviderType.OLLAMA: OllamaProvider,
 }
 
 

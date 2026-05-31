@@ -10,7 +10,7 @@ Startup order (matters — each step assumes the previous ones completed):
   5. server.run()  — blocks until Ctrl+C
 
 Resolution order for sensitive/environment values:
-  1. Environment variable (e.g. EVE_LOG_PATH, API_KEY)
+  1. Environment variable (e.g. EVE_LOG_PATH, LOCAL_MODEL_URL)
   2. app.config value
   3. Hardcoded default
 """
@@ -161,7 +161,6 @@ except ValueError:
 
 _provider_cfg = _model_cfg.get(_provider_name, {})
 _model_name   = _provider_cfg.get("model_name", "")
-_api_key      = os.getenv("API_KEY") or _provider_cfg.get("api_key", "")
 
 model_config = ModelConfig(
     provider        = _provider_type,
@@ -169,7 +168,6 @@ model_config = ModelConfig(
     max_tokens      = int(_model_cfg.get("max_tokens",  1024)),
     temperature     = float(_model_cfg.get("temperature", 0.0)),
     system_prompt   = _model_cfg.get("system_prompt") or None,
-    api_key         = _api_key,
     base_url        = _provider_cfg.get("base_url", ""),
     request_timeout = int(_provider_cfg.get("request_timeout", 120)),
 )
