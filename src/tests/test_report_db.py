@@ -26,7 +26,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# tests/ sits one level below src/, so reach up twice for the import root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
 from models import (

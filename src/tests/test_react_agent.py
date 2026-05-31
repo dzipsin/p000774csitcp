@@ -35,8 +35,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Make src/ imports work from anywhere
-sys.path.insert(0, str(Path(__file__).parent))
+# Make src/ imports work from anywhere — tests/ sits one level below src/.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
 from model_provider import ModelProvider, ProviderType

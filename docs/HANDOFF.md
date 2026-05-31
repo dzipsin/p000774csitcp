@@ -195,15 +195,16 @@ p000774csitcp/
     │   ├── app.js                   # incident card render + reasoning trace UI
     │   └── style.css
     ├── templates/index.html
-    ├── test_incident_manager.py
-    ├── test_report_generator.py
-    ├── test_report_serializer.py
-    ├── test_report_db.py            # Phase 10
-    ├── test_react_agent.py
-    ├── test_tool_registry.py
-    ├── test_agent_tools.py
-    ├── test_integration.py
-    ├── test_evaluation.py
+    ├── tests/                       # 9 test suites, 452 assertions
+    │   ├── test_incident_manager.py
+    │   ├── test_report_generator.py
+    │   ├── test_report_serializer.py
+    │   ├── test_report_db.py        # Phase 10
+    │   ├── test_react_agent.py
+    │   ├── test_tool_registry.py
+    │   ├── test_agent_tools.py
+    │   ├── test_integration.py
+    │   └── test_evaluation.py
     └── evaluation/
         ├── attack_runner.py         # DVWA HTTP client that fires scenarios
         ├── result_collector.py      # polls /api/incidents, computes metrics
@@ -332,21 +333,21 @@ Dashboard: <http://127.0.0.1:5000>. Attack DVWA at
 
 ```powershell
 # All 9 suites:
-python src/test_incident_manager.py
-python src/test_report_generator.py
-python src/test_report_serializer.py
-python src/test_report_db.py
-python src/test_react_agent.py
-python src/test_tool_registry.py
-python src/test_agent_tools.py
-python src/test_integration.py
-python src/test_evaluation.py
+python src/tests/test_incident_manager.py
+python src/tests/test_report_generator.py
+python src/tests/test_report_serializer.py
+python src/tests/test_report_db.py
+python src/tests/test_react_agent.py
+python src/tests/test_tool_registry.py
+python src/tests/test_agent_tools.py
+python src/tests/test_integration.py
+python src/tests/test_evaluation.py
 ```
 
 Or one-line sequential check:
 
 ```powershell
-foreach ($t in "test_incident_manager","test_report_generator","test_report_serializer","test_report_db","test_react_agent","test_tool_registry","test_agent_tools","test_integration","test_evaluation") { python "src\$t.py" 2>&1 | Select-Object -Last 3 }
+foreach ($t in "test_incident_manager","test_report_generator","test_report_serializer","test_report_db","test_react_agent","test_tool_registry","test_agent_tools","test_integration","test_evaluation") { python "src\tests\$t.py" 2>&1 | Select-Object -Last 3 }
 ```
 
 Expect: all pass (counts in the **Test totals** section below).

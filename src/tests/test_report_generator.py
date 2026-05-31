@@ -34,7 +34,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
-sys.path.insert(0, str(Path(__file__).parent))
+# tests/ sits one level below src/, so reach up twice for the import root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
 from models import Incident, extract_attack_type

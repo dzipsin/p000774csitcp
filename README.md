@@ -579,7 +579,8 @@ p000774csitcp/
 │   │   ├── result_collector.py
 │   │   └── report_writer.py
 │   │
-│   └── test_*.py                    # 9 test suites, 451 assertions
+│   └── tests/                       # 9 test suites, 452 assertions
+│       └── test_*.py
 │
 ├── lab/
 │   └── suricata/
@@ -641,7 +642,7 @@ Take VirtualBox snapshots at these milestones:
 
 **Branches** — work on `feature/sqlite-persistence` (latest, has everything). `main` is pre-agentic; do not demo from it. Merge sequence + state in `docs/HANDOFF.md`.
 
-**Tests** — `python -m unittest discover -s src -p "test_*.py"` runs 9 suites covering log monitor, AI module, ReAct agent, tool registry, agent tools, report generator (incl. single_shot enrichment fallback), report DB, serializer, web server.
+**Tests** — `python -m unittest discover -s src/tests -p "test_*.py"` runs 9 suites covering ReAct agent, tool registry, agent tools, incident manager, report generator (incl. single_shot enrichment fallback), report DB, serializer, integration, and evaluation. Each file is also runnable directly: `python src/tests/test_react_agent.py`.
 
 **Commit convention** — no AI-attribution trailers (no `Co-Authored-By: Claude ...`). Capstone academic integrity.
 

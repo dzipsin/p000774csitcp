@@ -16,8 +16,8 @@ import json
 import sys
 from pathlib import Path
 
-# Make src/ imports work from anywhere
-sys.path.insert(0, str(Path(__file__).parent))
+# Make src/ imports work from anywhere — tests/ sits one level below src/.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tool_registry import ToolDefinition, ToolRegistry, ToolResult
 

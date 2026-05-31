@@ -21,7 +21,8 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# tests/ sits one level below src/, so reach up twice for the import root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
 from incident_manager import IncidentManager

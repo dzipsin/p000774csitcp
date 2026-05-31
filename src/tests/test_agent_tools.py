@@ -21,8 +21,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-# Make src/ imports work from anywhere
-sys.path.insert(0, str(Path(__file__).parent))
+# Make src/ imports work from anywhere — tests/ sits one level below src/.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent_tools import (
     make_alert_history_tool,

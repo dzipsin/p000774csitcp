@@ -26,8 +26,8 @@ import sys
 import time
 from pathlib import Path
 
-# Make src/ imports work from anywhere
-sys.path.insert(0, str(Path(__file__).parent))
+# Make src/ imports work from anywhere — tests/ sits one level below src/.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
 from incident_manager import IncidentManager
