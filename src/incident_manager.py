@@ -280,14 +280,6 @@ class IncidentManager:
             # Alerts list is still shared, but alerts themselves are frozen.
             return list(self._open_incidents.values())
 
-    def get_incident(self, incident_id: str) -> Optional[Incident]:
-        """Return an open incident by ID, or None if not found."""
-        with self._lock:
-            for inc in self._open_incidents.values():
-                if inc.incident_id == incident_id:
-                    return inc
-        return None
-
     def is_repeat_offender(self, source_ip: str) -> bool:
         """Whether this source IP has been seen before in this session.
 
