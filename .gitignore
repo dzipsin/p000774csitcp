@@ -217,3 +217,5 @@ data/
 # Temp files generated for commit message construction
 .commit_msg.tmp
 *.commit_msg.tmp
+# Personal session handoff doc (not a project deliverable)
+RESUME_HERE.md
