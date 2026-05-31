@@ -568,7 +568,6 @@ p000774csitcp/
 │   ├── storage.py                   # JSON-file backend (legacy / ablation fallback)
 │   ├── report_db.py                 # SQLite backend (default): WAL, thread-local,
 │   │                                # retention sweeper, history queries by IP/attack/severity
-│   ├── ai_module.py                 # legacy AIAnalyzer for /api/analyse (pre-agent path)
 │   │
 │   ├── web_server.py                # Flask + Socket.IO dashboard server
 │   ├── static/                      # dashboard JS + CSS

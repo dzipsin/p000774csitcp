@@ -185,11 +185,6 @@ document.getElementById('clear-btn').addEventListener('click', () => {
   fetch('/api/alerts/clear', { method: 'POST' });
 });
 
-// Legacy batch "Analyse" button — opens raw JSON (kept for backward compat)
-document.getElementById('analyse-btn').addEventListener('click', () => {
-  window.open('/api/analyse', '_blank');
-});
-
 // ----------------------------------------------------------------------------
 // Incidents handling
 // ----------------------------------------------------------------------------

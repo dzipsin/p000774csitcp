@@ -26,7 +26,6 @@ from pathlib import Path
 
 from log_monitor import LogMonitor
 from web_server import Server
-from ai_module import AIAnalyzer
 from model_provider import ModelConfig, ProviderType, create_provider
 from incident_manager import IncidentManager
 from report_generator import ReportGenerator
@@ -44,7 +43,7 @@ logging.basicConfig(
 )
 
 for mod in (
-    "ai_module", "model_provider", "log_monitor",
+    "model_provider", "log_monitor",
     "incident_manager", "report_generator", "storage", "web_server",
 ):
     logging.getLogger(mod).setLevel(logging.INFO)
@@ -237,14 +236,6 @@ report_generator = None
 
 try:
     provider = create_provider(model_config)
-
-    # Legacy AIAnalyzer (for backward-compatible /api/analyse)
-    analyser = AIAnalyzer(
-        provider,
-        include_lab_context=INCLUDE_LAB_CONTEXT,
-        summary_mode=SUMMARY_MODE,
-    )
-    server.set_analyser(analyser)
 
     # Build the ReActAgent if requested. Done in a try-block so a misconfigured
     # tool registry doesn't block the rest of the pipeline — single-shot

@@ -6,13 +6,11 @@ Responsibilities:
   - Receive AlertRecord objects via push_alert() from LogMonitor
   - Receive IncidentReport objects via push_incident_report() from ReportGenerator
   - Push alerts and incidents to browsers in real-time over WebSocket
-  - Expose REST endpoints to query buffered alerts, incidents, and trigger analysis
+  - Expose REST endpoints to query buffered alerts and incidents
 
 Depends on:
   log_monitor.AlertRecord    - consumed via push_alert()
-  ai_module.AIAnalyzer       - called on demand via /api/analyse (legacy batch mode)
-  ai_module.AlertReport      - legacy return type of /api/analyse
-  models.IncidentReport      - new per-incident report type
+  models.IncidentReport      - per-incident report type
   incident_manager           - (optional) wired to support /api/incidents/regenerate
 """
 
@@ -26,7 +24,6 @@ from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO
 
 from log_monitor import AlertRecord
-from ai_module import AIAnalyzer, AlertReport
 from models import IncidentReport
 
 log = logging.getLogger(__name__)
@@ -55,7 +52,6 @@ class Server:
     Usage::
 
         server = Server(host="0.0.0.0", port=5000, secret_key="...")
-        server.set_analyser(analyser)
         server.set_incident_force_regenerate(incident_manager.force_regenerate_all)
         server.set_storage(storage)
         monitor.subscribe(server.push_alert)
@@ -89,7 +85,6 @@ class Server:
         self._incidents_lock = threading.Lock()
 
         # Optional integrations
-        self._analyser: Optional[AIAnalyzer] = None
         self._incident_force_regenerate: Optional[Callable[[], int]] = None
         self._incident_clear_all: Optional[Callable[[], int]] = None
         # Phase 10: query-capable storage backend (ReportDatabase). Endpoints
@@ -109,10 +104,6 @@ class Server:
     # ------------------------------------------------------------------
     # Integration points
     # ------------------------------------------------------------------
-
-    def set_analyser(self, analyser: AIAnalyzer) -> None:
-        """Attach the legacy AIAnalyzer (for /api/analyse batch mode)."""
-        self._analyser = analyser
 
     def set_incident_force_regenerate(self, fn: Callable[[], int]) -> None:
         """Attach IncidentManager.force_regenerate_all."""
@@ -244,29 +235,6 @@ class Server:
                 log.exception("Failed to emit clear event")
             return jsonify({"cleared": count})
 
-        @app.route("/api/analyse", methods=["GET", "POST"])
-        def api_analyse():
-            """Legacy batch-mode analysis endpoint.
-
-            Kept for backward compatibility with the old "Analyse" button.
-            New flow uses /api/incidents/* endpoints.
-            """
-            if self._analyser is None:
-                return jsonify({"error": "AI analyser not configured."}), 503
-
-            body = request.get_json(silent=True) or {}
-            last_n = int(body.get("last_n", self.max_buffer))
-
-            with self._buffer_lock:
-                batch = list(self._buffer[-last_n:])
-
-            try:
-                report: AlertReport = self._analyser.analyse(batch)
-                return jsonify(dataclasses.asdict(report))
-            except Exception as e:
-                log.exception("Legacy /api/analyse failed")
-                return jsonify({"error": str(e)}), 500
-
         @app.route("/api/status")
         def api_status():
             """Simple health-check endpoint."""
@@ -278,7 +246,6 @@ class Server:
                 "status":               "ok",
                 "buffered_alerts":      buffered,
                 "cached_incidents":     inc_count,
-                "ai_ready":             self._analyser is not None,
                 "incident_pipeline":    self._incident_force_regenerate is not None,
             })
 

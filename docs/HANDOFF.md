@@ -183,9 +183,7 @@ p000774csitcp/
     ├── storage.py                   # ReportStorage (JSON file backend, legacy)
     ├── models.py                    # AlertClassification, Incident, IncidentReport,
     │                                # ReasoningStep + all nested dataclasses
-    ├── model_provider.py            # ModelProvider ABC + Ollama / Anthropic /
-    │                                # llama.cpp implementations
-    ├── ai_module.py                 # legacy AIAnalyzer for /api/analyse
+    ├── model_provider.py            # ModelProvider ABC + OllamaProvider
     ├── react_agent.py               # ReActAgent — XML-tagged ReAct loop +
     │                                # auto-enrichment + reasoning trace
     ├── tool_registry.py             # ToolDefinition + ToolRegistry + ToolResult
@@ -607,11 +605,14 @@ In priority order:
    split across days. Output: `eval_results/p6_combined_report.md` with
    ΔF1 column per design decision.
 
-2. **Dead-code audit** — produce a deletion-candidate list (legacy
-   `ai_module.py`, legacy `storage.py` JSON backend, unused
-   `model_provider.py` Anthropic / llama.cpp branches if only Ollama
-   runs, any leftover prints / stale TODOs) before deleting anything.
-   Operator wants a reviewable list first.
+2. **Dead-code audit** — first pass complete: dropped `ai_module.py`
+   (legacy batch path + `/api/analyse` endpoint + the "Analyse (Batch)"
+   button), dropped `AnthropicProvider` + `LlamaCppProvider` from
+   `model_provider.py` (capstone is Ollama-only), removed the unused
+   `IncidentManager.get_incident`, and routed `log_monitor.py` prints
+   through the stdlib logger. Pending: migrate the JSON-backed tests
+   off `ReportStorage` so `storage.py` can go (the JSON backend is
+   kept on disk as the SQLite-ablation fallback otherwise).
 
 3. **Docstring + WHY-comment audit** — module-level docstrings on public
    classes / functions so the code can be picked up cold by next year's

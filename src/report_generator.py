@@ -20,12 +20,13 @@ Design principles:
     to treat alert data fields as untrusted content.
 
 Depends on:
-  models.*                  — dataclasses
+  models.*                     — dataclasses
   model_provider.ModelProvider — LLM backend abstraction
-  storage.ReportStorage     — persistence
+  storage.ReportStorage        — persistence (JSON file backend)
+  report_db.ReportDatabase     — persistence (SQLite backend, default)
 
-This module replaces AIAnalyzer (which stays in place for backward compat).
-The frontend will migrate to /api/incidents endpoints in Stage C.
+The frontend consumes the per-incident output of this module via
+/api/incidents/*; there is no batch-mode classification path any more.
 """
 
 from __future__ import annotations
