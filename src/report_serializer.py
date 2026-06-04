@@ -8,7 +8,7 @@ Incident Report Template v1.pdf at the project root). Used by:
       dashboard / WebSocket clients / /api/incidents endpoint
 
 The internal IncidentReport dataclass remains unchanged. This module is a
-pure serialization adapter — it reads the rich internal model and emits a
+pure serialization adapter - it reads the rich internal model and emits a
 flatter, template-compliant dict. Field naming, section placement, type
 coercion, and severity-level normalisation are all handled here.
 
@@ -37,7 +37,7 @@ try:
     from jsonschema import validate as _jsonschema_validate
     from jsonschema import ValidationError as _ValidationError
     _JSONSCHEMA_AVAILABLE = True
-except ImportError:  # pragma: no cover — covered by requirements.txt
+except ImportError:  # pragma: no cover - covered by requirements.txt
     _JSONSCHEMA_AVAILABLE = False
     _ValidationError = Exception  # type: ignore[misc, assignment]
 
@@ -54,7 +54,7 @@ log = logging.getLogger(__name__)
 # (incident_id, classification per alert, etc.) survive the schema check.
 # ---------------------------------------------------------------------------
 
-# Lowercase 3-tier — matches the custom Suricata rules' priority tiers
+# Lowercase 3-tier - matches the custom Suricata rules' priority tiers
 # (P1 = critical, P2 = high, P3 = low) and the dashboard alert filter.
 _VALID_SEVERITIES = ["critical", "high", "low"]
 
@@ -265,8 +265,8 @@ def validate_template_v1(data: Dict[str, Any]) -> None:
 
     Raises jsonschema.ValidationError on schema violation.
 
-    No-op if jsonschema is not installed (shouldn't happen — added to
-    requirements.txt — but defensive).
+    No-op if jsonschema is not installed (shouldn't happen - added to
+    requirements.txt - but defensive).
     """
     if not _JSONSCHEMA_AVAILABLE:
         log.warning("jsonschema not installed; skipping template v1 validation")
@@ -275,13 +275,13 @@ def validate_template_v1(data: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Helpers — type coercion and field mapping
+# Helpers - type coercion and field mapping
 # ---------------------------------------------------------------------------
 
 # Maps any dialect of severity we might see (legacy TitleCase, "info",
 # "medium", upstream Suricata severity labels) onto the canonical lowercase
 # 3-tier scale. "medium" buckets to "high" since that's where the Suricata
-# P2 rules sit — the legacy 4-tier ladder was retired.
+# P2 rules sit - the legacy 4-tier ladder was retired.
 _SEVERITY_NORMALISE = {
     "critical":      "critical",
     "high":          "high",
@@ -308,7 +308,7 @@ def _coerce_port(value: Any) -> Optional[int]:
     if value is None:
         return None
     try:
-        if isinstance(value, bool):  # bool is subclass of int — guard
+        if isinstance(value, bool):  # bool is subclass of int - guard
             return None
         return int(value)
     except (TypeError, ValueError):
@@ -399,7 +399,7 @@ def _serialise_alerts(
             "protocol": protocol,
             "suricata_rule_id": str(raw.get("signature_id", "") or ""),
             # Preserve a few internal fields the dashboard already reads.
-            # These are template "extras" — additionalProperties allows them.
+            # These are template "extras" - additionalProperties allows them.
             "_internal": {
                 "src_port_raw": raw.get("src_port"),
                 "dst_port_raw": raw.get("dst_port"),
@@ -436,7 +436,7 @@ def _serialise_incident_summary(report: IncidentReport) -> Dict[str, Any]:
 def _serialise_summary_description(report: IncidentReport) -> Dict[str, Any]:
     d = report.incident_summary_description
     # attack_types_identified duplicates detected_attacks (template wants
-    # both — top-level for headline, here for narrative parity).
+    # both - top-level for headline, here for narrative parity).
     return {
         "overview": d.overview or "",
         "attack_types_identified": list(report.incident_summary.detected_attacks or []),
@@ -460,12 +460,12 @@ def _serialise_alert_analyses(
             "payload_classification": a.payload_classification or "",
             "likely_intent": a.likely_intent or "",
             "confidence_score": float(a.confidence_score or 0.0),
-            # Extras — Stage 1 verdict mirror
+            # Extras - Stage 1 verdict mirror
             "classification": a.classification,
             "severity": a.severity,
             "recommendation": a.recommendation,
             "classification_status": a.classification_status,
-            # ReAct agent metadata (extras — allowed via additionalProperties)
+            # ReAct agent metadata (extras - allowed via additionalProperties)
             "agent_mode": getattr(a, "agent_mode", "single_shot"),
             "parse_failure_count": int(getattr(a, "parse_failure_count", 0) or 0),
             "tool_calls": int(getattr(a, "tool_calls", 0) or 0),
@@ -543,7 +543,7 @@ def _serialise_exposure_description(report: IncidentReport) -> Dict[str, Any]:
 def to_template_v1(report: IncidentReport) -> Dict[str, Any]:
     """Serialise an IncidentReport to a template-v1-compliant dict.
 
-    Always returns a dict — never raises on missing/malformed internal
+    Always returns a dict - never raises on missing/malformed internal
     data. Use validate_template_v1() to schema-check the output.
 
     Internal extras (incident_id, classification per alert, reasoning

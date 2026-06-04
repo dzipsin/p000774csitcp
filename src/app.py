@@ -2,12 +2,12 @@
 """
 app.py - Entrypoint: loads app.config, wires modules, starts the server.
 
-Startup order (matters — each step assumes the previous ones completed):
+Startup order (matters - each step assumes the previous ones completed):
   1. Parse config and set up logging
   2. Create all objects (no starts yet)
   3. Wire callbacks between them
   4. Start background services (IncidentManager sweeper, LogMonitor tail)
-  5. server.run()  — blocks until Ctrl+C
+  5. server.run()  - blocks until Ctrl+C
 
 Resolution order for sensitive/environment values:
   1. Environment variable (e.g. EVE_LOG_PATH, LOCAL_MODEL_URL)
@@ -116,7 +116,7 @@ MAX_RETRIES         = int(_analysis_cfg.get("max_retries", 1))
 
 
 # ---------------------------------------------------------------------------
-# Agent config (Phase 4 — agentic ReAct loop)
+# Agent config (Phase 4 - agentic ReAct loop)
 # ---------------------------------------------------------------------------
 
 _agent_cfg              = _cfg.get("agent", {})
@@ -134,12 +134,12 @@ AGENT_TOOLS_ENABLED     = {
     "get_attack_pattern_stats":  bool(_agent_tools_cfg.get("get_attack_pattern_stats", True)),
 }
 
-# Environment lookup entries — list of dicts from [[agent.environment.entries]]
+# Environment lookup entries - list of dicts from [[agent.environment.entries]]
 _agent_env_cfg          = _agent_cfg.get("environment", {})
 AGENT_ENV_ENTRIES       = list(_agent_env_cfg.get("entries", []))
 
 if AGENT_MODE not in ("single_shot", "react"):
-    log.warning("Invalid agent.mode '%s' — defaulting to 'single_shot'", AGENT_MODE)
+    log.warning("Invalid agent.mode '%s' - defaulting to 'single_shot'", AGENT_MODE)
     AGENT_MODE = "single_shot"
 
 
@@ -222,7 +222,7 @@ try:
     provider = create_provider(model_config)
 
     # Build the ReActAgent if requested. Done in a try-block so a misconfigured
-    # tool registry doesn't block the rest of the pipeline — single-shot
+    # tool registry doesn't block the rest of the pipeline - single-shot
     # fallback keeps the system useful.
     react_agent = None
     if AGENT_MODE == "react":
@@ -264,9 +264,9 @@ try:
                 tool_registry.list_names(), AGENT_MAX_ITERATIONS, AGENT_TOTAL_BUDGET,
                 AGENT_AUTO_ENRICHMENT,
             )
-        except Exception as agent_err:  # noqa: BLE001 — degrade gracefully
+        except Exception as agent_err:  # noqa: BLE001 - degrade gracefully
             log.warning(
-                "ReAct agent init failed (%s) — falling back to single_shot. "
+                "ReAct agent init failed (%s) - falling back to single_shot. "
                 "Set [agent].mode = 'single_shot' in app.config to silence this.",
                 agent_err,
             )
@@ -286,7 +286,7 @@ try:
         agent_mode=effective_agent_mode,
         react_agent=react_agent,
         # Pass env_entries so the rule-based suggestion generator and
-        # the LLM-suggestion filter keep working in single_shot mode —
+        # the LLM-suggestion filter keep working in single_shot mode -
         # they derive facts deterministically from source_ip + env config
         # when no reasoning trace exists.
         env_entries=AGENT_ENV_ENTRIES,
@@ -302,7 +302,7 @@ try:
     # Phase 10: attach the storage backend so the Server can serve the
     # history-query endpoints (/api/incidents/by-ip, /by-attack, /stats).
     # Works for both SQLite (full feature set) and JSON (those endpoints
-    # return 503 — Server.set_storage falls back gracefully via hasattr).
+    # return 503 - Server.set_storage falls back gracefully via hasattr).
     server.set_storage(storage)
 
     log.info("Model provider : %s", model_config.provider.value)
@@ -318,7 +318,7 @@ except Exception as e:
     )
     # Even without the AI, we keep the IncidentManager running so the
     # dashboard can at least track alert groupings. It just won't
-    # produce reports (callback stays None → IncidentManager logs and skips).
+    # produce reports (callback stays None -> IncidentManager logs and skips).
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +336,7 @@ monitor.subscribe(incident_manager.process_alert)
 
 def _graceful_shutdown(signum, frame):
     """Stop background services cleanly on Ctrl+C."""
-    log.info("Shutdown signal received — stopping services...")
+    log.info("Shutdown signal received - stopping services...")
     try:
         monitor.stop()
     except Exception:

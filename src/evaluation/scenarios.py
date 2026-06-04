@@ -7,7 +7,7 @@ the AI's output against this ground truth.
 
 Ground truth philosophy: the label describes the attacker's INTENT, not
 whether the attack would succeed. A SQLi UNION payload against a table that
-doesn't exist is still a true positive SQLi attempt — the detection decision
+doesn't exist is still a true positive SQLi attempt - the detection decision
 shouldn't care about the outcome.
 
 Each scenario gets a unique `eval_id` embedded in the request (usually via
@@ -167,14 +167,14 @@ SCENARIOS: List[Scenario] = [
     Scenario(
         eval_id="sqli_short_008",
         category="SQLi",
-        description="Minimal SQLi — single quote error probe",
+        description="Minimal SQLi - single quote error probe",
         method="GET",
         path="/vulnerabilities/sqli/",
         query_params={"id": "'", "Submit": "Submit"},
         expected_classification="true_positive",
         expected_severity="low",
         expected_attack_type="SQLi",
-        # Minimal payload — Suricata's ET rules may or may not fire on a lone quote
+        # Minimal payload - Suricata's ET rules may or may not fire on a lone quote
         expected_to_trigger_suricata=False,
     ),
 
@@ -187,7 +187,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/xss_r/",
         query_params={"name": "<script>alert('xss')</script>"},
         expected_classification="true_positive",
-        # Matches custom XSS rule 2000040 (raw script tag in URI) — P2 high
+        # Matches custom XSS rule 2000040 (raw script tag in URI) - P2 high
         expected_severity="high",
         expected_attack_type="XSS",
     ),
@@ -224,7 +224,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/xss_r/",
         query_params={"name": '"><script>alert(1)</script>'},
         expected_classification="true_positive",
-        # Raw script tag — matches P2 rule 2000040.
+        # Raw script tag - matches P2 rule 2000040.
         expected_severity="high",
         expected_attack_type="XSS",
     ),
@@ -236,7 +236,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/xss_r/",
         query_params={"name": "%3Cscript%3Ealert(1)%3C%2Fscript%3E"},
         expected_classification="true_positive",
-        # URL-encoded script tag — matches P2 rule 2000040 via pcre.
+        # URL-encoded script tag - matches P2 rule 2000040 via pcre.
         expected_severity="high",
         expected_attack_type="XSS",
         # Double-encoding can slip past some rule variants

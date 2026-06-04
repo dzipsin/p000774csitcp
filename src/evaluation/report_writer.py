@@ -40,7 +40,7 @@ def _render(label, scenario_results, metrics, matrix, args) -> str:
     lines: List[str] = []
 
     # -------- Header --------
-    lines.append(f"# Evaluation Report — `{label}`")
+    lines.append(f"# Evaluation Report - `{label}`")
     lines.append("")
     lines.append(f"*Generated {timestamp}*")
     lines.append("")
@@ -87,13 +87,13 @@ def _render(label, scenario_results, metrics, matrix, args) -> str:
     fp_row = matrix.get("likely_false_positive", {})
     lines.append(
         f"| **`true_positive`** (attacks)    | "
-        f"{tp_row.get('true_positive', 0)} ✓ | "
-        f"{tp_row.get('likely_false_positive', 0)} ✗ |"
+        f"{tp_row.get('true_positive', 0)} + | "
+        f"{tp_row.get('likely_false_positive', 0)} x |"
     )
     lines.append(
         f"| **`likely_false_positive`** (benign) | "
-        f"{fp_row.get('true_positive', 0)} ✗ | "
-        f"{fp_row.get('likely_false_positive', 0)} ✓ |"
+        f"{fp_row.get('true_positive', 0)} x | "
+        f"{fp_row.get('likely_false_positive', 0)} + |"
     )
     lines.append("")
 
@@ -128,9 +128,9 @@ def _render(label, scenario_results, metrics, matrix, args) -> str:
     lines.append("|---|---|---|---|---|---|---|---|")
     for i, sr in enumerate(scenario_results, 1):
         c = sr.classification or {}
-        predicted = c.get("classification") or "—"
-        severity = c.get("severity") or "—"
-        attack_type = c.get("attack_type") or "—"
+        predicted = c.get("classification") or "-"
+        severity = c.get("severity") or "-"
+        attack_type = c.get("attack_type") or "-"
         status_icon = _status_icon(sr)
         lines.append(
             f"| {i} | `{sr.scenario.eval_id}` | {sr.scenario.category} | "
@@ -147,7 +147,7 @@ def _render(label, scenario_results, metrics, matrix, args) -> str:
         for sr in mistakes:
             lines.append(f"- **`{sr.scenario.eval_id}`** ({sr.scenario.category}): "
                          f"expected `{sr.scenario.expected_classification}`, "
-                         f"got `{(sr.classification or {}).get('classification', '—')}`")
+                         f"got `{(sr.classification or {}).get('classification', '-')}`")
             lines.append(f"  - Description: {sr.scenario.description}")
         lines.append("")
 
@@ -160,18 +160,18 @@ def _render(label, scenario_results, metrics, matrix, args) -> str:
 
 def _status_icon(sr: ScenarioResult) -> str:
     if sr.status == "matched":
-        return "✓" if sr.correct_classification else "✗"
+        return "+" if sr.correct_classification else "x"
     if sr.status == "no_detection":
         # Expected benign with no detection is the CORRECT outcome
         if sr.scenario.expected_classification == "likely_false_positive":
-            return "✓"
+            return "+"
         if not sr.scenario.expected_to_trigger_suricata:
-            return "○"  # acknowledged limitation
+            return "~"  # acknowledged limitation
         return "?"
     if sr.status == "classification_error":
         return "!"
     if sr.status == "fire_failed":
-        return "✗"
+        return "x"
     return "?"
 
 

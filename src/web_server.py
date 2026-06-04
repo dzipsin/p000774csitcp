@@ -166,7 +166,7 @@ class Server:
 
         with self._incidents_lock:
             self._incidents[incident_id] = report_dict
-            # Cap cache size — drop oldest if we exceed the limit
+            # Cap cache size - drop oldest if we exceed the limit
             if len(self._incidents) > self.max_incident_buffer:
                 oldest_key = next(iter(self._incidents))
                 self._incidents.pop(oldest_key, None)
@@ -325,7 +325,7 @@ class Server:
         # These endpoints depend on the ReportDatabase query methods. The
         # _require_query_backend guard below still uses hasattr() so an
         # alternate backend without one of the methods would degrade to 503
-        # instead of crashing — defensive but cheap.
+        # instead of crashing - defensive but cheap.
         # ------------------------------------------------------------------
 
         def _require_query_backend(method_name: str):
@@ -350,7 +350,7 @@ class Server:
             """All incidents from a given source IP across all sessions.
 
             Query params:
-                hours = N  → only incidents whose generated_at is within
+                hours = N  -> only incidents whose generated_at is within
                              the last N hours.
             """
             err = _require_query_backend("list_by_source_ip")
@@ -417,7 +417,7 @@ class Server:
         def api_incidents_stats():
             """Aggregate counts of incidents by status / severity / attack
             type plus repeat-offender count. Query params:
-                hours = N  → bound the window."""
+                hours = N  -> bound the window."""
             err = _require_query_backend("aggregate_stats")
             if err is not None:
                 return err

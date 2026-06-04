@@ -30,7 +30,7 @@ Process:
            generate the report before the next attack starts a new incident
     5. Force-regenerate any still-open incidents so their reports are current
     6. Wait a final settle period, then fetch incidents
-    7. Correlate scenarios → reports, compute metrics
+    7. Correlate scenarios -> reports, compute metrics
     8. Write raw results + human-readable report to outdir
 
 The script NEVER modifies your config. Run it against each configuration
@@ -163,7 +163,7 @@ def main() -> int:
             if fire.error:
                 log.warning("  fired with error: %s", fire.error)
             else:
-                log.info("  HTTP %d → %s", fire.http_status, fire.url_fired[:90])
+                log.info("  HTTP %d -> %s", fire.http_status, fire.url_fired[:90])
 
             sr = ScenarioResult(scenario=scenario, fire=fire)
             all_scenario_results.append(sr)
@@ -190,7 +190,7 @@ def main() -> int:
     incidents = dashboard.list_incidents()
     log.info("Fetched %d incident(s)", len(incidents))
 
-    log.info("Correlating scenarios → reports...")
+    log.info("Correlating scenarios -> reports...")
     correlate(all_scenario_results, incidents)
 
     metrics = compute_metrics(all_scenario_results)

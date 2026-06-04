@@ -10,7 +10,7 @@ docs/AGENT_DESIGN.md for the full design.
 
 Public surface:
     ReActAgent             the agent class
-    classify(alert) ->     AlertClassification — never raises
+    classify(alert) ->     AlertClassification - never raises
 
 Contracts:
     - Always returns an AlertClassification. Exceptions at every layer are
@@ -80,7 +80,7 @@ CLASSIFICATION RULES:
 - "true_positive": a genuine security threat or confirmed attack attempt.
 - "likely_false_positive": benign or expected infrastructure behaviour.
 
-SEVERITY SCALE (matches the custom Suricata rule tiers — P1/P2/P3):
+SEVERITY SCALE (matches the custom Suricata rule tiers - P1/P2/P3):
 - "critical": confirmed exploit behaviour (UNION-SELECT credential pull,
   cookie exfiltration, OS command execution, authentication bypass).
 - "high": clear injection / XSS structure showing intent even when
@@ -96,7 +96,7 @@ RECOMMENDATIONS:
 - "continue_monitoring": low risk or likely false positive."""
 
 
-_REACT_OUTPUT_FORMAT = """OUTPUT FORMAT — strict.
+_REACT_OUTPUT_FORMAT = """OUTPUT FORMAT - strict.
 
 On each turn, either CALL A TOOL or PROVIDE A FINAL ANSWER. Use exactly
 these XML tags. Do not output prose outside the tags.
@@ -115,7 +115,7 @@ You may then think again and either call another tool or finish.
 
 To finish:
 
-<thought>SYNTHESISE the enrichment data already in the prompt — reference the concrete facts you can see. Do NOT write "let me check", "I should investigate", or "let me verify" — by the time you emit final_answer, no further checks are happening. Cite the prior_alert_count, env role, attack types seen, or specific signature wording in your reasoning.</thought>
+<thought>SYNTHESISE the enrichment data already in the prompt - reference the concrete facts you can see. Do NOT write "let me check", "I should investigate", or "let me verify" - by the time you emit final_answer, no further checks are happening. Cite the prior_alert_count, env role, attack types seen, or specific signature wording in your reasoning.</thought>
 <final_answer>
 {
   "classification": "true_positive" | "likely_false_positive",
@@ -133,7 +133,7 @@ fences. No prose outside the tags."""
 _REACT_TOOL_USE_GUIDANCE = """WHEN TO USE TOOLS:
 
 The agent runtime automatically performs pre-classification enrichment
-before you see the alert — it pre-calls get_alert_history,
+before you see the alert - it pre-calls get_alert_history,
 lookup_environment_context, and (when attack type is recognised)
 get_attack_pattern_stats. Their results appear at the top of the user
 message inside <system_enrichment> blocks. Treat these as authoritative
@@ -162,7 +162,7 @@ User alert:
 Your response:
 <thought>UNION SELECT in URL targeting user credentials. Unambiguous SQLi. No tools needed.</thought>
 <final_answer>
-{"classification": "true_positive", "severity": "critical", "summary": "UNION-based SQL injection extracting credentials", "recommendation": "block_source_ip", "reasoning": "URL contains explicit UNION SELECT user, password FROM users payload — credential exfiltration intent. Critical severity matches Suricata P1 active-extraction tier."}
+{"classification": "true_positive", "severity": "critical", "summary": "UNION-based SQL injection extracting credentials", "recommendation": "block_source_ip", "reasoning": "URL contains explicit UNION SELECT user, password FROM users payload - credential exfiltration intent. Critical severity matches Suricata P1 active-extraction tier."}
 </final_answer>
 
 --- Example 2: ambiguous internal traffic, one tool needed ---
@@ -191,12 +191,12 @@ Your response:
 <action>get_alert_history</action>
 <action_input>{"src_ip": "192.168.56.1", "hours": 24}</action_input>
 <observation>{"total_prior_alerts": 14, "attack_types_seen": ["SQLi", "XSS"], "is_repeat_offender_this_session": true}</observation>
-<thought>14 prior alerts spanning SQLi and XSS — active multi-vector attacker.</thought>
+<thought>14 prior alerts spanning SQLi and XSS - active multi-vector attacker.</thought>
 <final_answer>
-{"classification": "true_positive", "severity": "high", "summary": "SQLi probe from active attacker (14 prior alerts, multiple techniques)", "recommendation": "block_source_ip", "reasoning": "Source IP has 14 prior alerts across SQLi and XSS in last 24h — sustained multi-vector campaign. Boolean-blind injection structure is P2-tier high. Block to interrupt."}
+{"classification": "true_positive", "severity": "high", "summary": "SQLi probe from active attacker (14 prior alerts, multiple techniques)", "recommendation": "block_source_ip", "reasoning": "Source IP has 14 prior alerts across SQLi and XSS in last 24h - sustained multi-vector campaign. Boolean-blind injection structure is P2-tier high. Block to interrupt."}
 </final_answer>
 
---- Example 4: enrichment fully resolves the verdict — straight to final_answer (no extra tools) ---
+--- Example 4: enrichment fully resolves the verdict - straight to final_answer (no extra tools) ---
 
 User alert (with system_enrichment blocks already provided by the runtime):
 {"signature": "ET WEB_SERVER SELECT USER SQL Injection Attempt in URI",
@@ -209,9 +209,9 @@ System enrichment (already in your prompt):
   - get_attack_pattern_stats -> SQLi total_alerts=2 over last 24h
 
 Your response (NOTE: thought SYNTHESISES the facts; no "let me check"):
-<thought>Enrichment shows untrusted-external source IP (192.168.56.1) with 2 prior alerts this session; signature targets the users table via UNION SELECT. No additional tools needed — the verdict is determined.</thought>
+<thought>Enrichment shows untrusted-external source IP (192.168.56.1) with 2 prior alerts this session; signature targets the users table via UNION SELECT. No additional tools needed - the verdict is determined.</thought>
 <final_answer>
-{"classification": "true_positive", "severity": "critical", "summary": "UNION-based SQLi targeting user credentials from confirmed adversarial source", "recommendation": "block_source_ip", "reasoning": "Source 192.168.56.1 is in the untrusted host-only attacker network and has 2 prior alerts this session. The payload contains 'UNION SELECT user, password FROM users' — explicit credential extraction matches Suricata P1 critical tier."}
+{"classification": "true_positive", "severity": "critical", "summary": "UNION-based SQLi targeting user credentials from confirmed adversarial source", "recommendation": "block_source_ip", "reasoning": "Source 192.168.56.1 is in the untrusted host-only attacker network and has 2 prior alerts this session. The payload contains 'UNION SELECT user, password FROM users' - explicit credential extraction matches Suricata P1 critical tier."}
 </final_answer>
 """
 
@@ -244,7 +244,7 @@ def _extract_tags(text: str) -> List[Tuple[str, str]]:
 
     Returns list of (tag_name, content). Content is the inner text with
     leading/trailing whitespace stripped. Malformed or unknown tags are
-    silently ignored — the agent's higher-level logic decides what to do
+    silently ignored - the agent's higher-level logic decides what to do
     when expected tags are missing.
     """
     matches = []
@@ -315,7 +315,7 @@ class ReActAgent:
                                             observation from each enrichment
                                             tool call. Within this window
                                             (per (tool, args) key) the cached
-                                            result is reused — saves compute
+                                            result is reused - saves compute
                                             and cleans the trace when many
                                             alerts in an incident share the
                                             same source IP / attack type.
@@ -330,7 +330,7 @@ class ReActAgent:
         self._include_lab_context_in_fallback = include_lab_context_in_fallback
         self._auto_enrichment = bool(auto_enrichment)
 
-        # Enrichment cache — thread-safe (classify() is called from
+        # Enrichment cache - thread-safe (classify() is called from
         # IncidentManager worker threads). Cache entries hold the observation
         # JSON + the original tool execution duration so we can reconstruct
         # honest ReasoningSteps on cache hits.
@@ -339,7 +339,7 @@ class ReActAgent:
         self._enrichment_cache_lock = threading.Lock()
 
         # System prompt is built once at init. Tool registry is treated as
-        # immutable after agent construction — register all tools before
+        # immutable after agent construction - register all tools before
         # creating the agent.
         self._system_prompt = _build_react_system_prompt(tools.to_prompt_block())
 
@@ -358,8 +358,8 @@ class ReActAgent:
     def classify(self, alert: AlertRecord) -> AlertClassification:
         """Run the ReAct loop. Always returns an AlertClassification.
 
-        Hybrid policy (Option F from AGENT_DESIGN §5.5):
-          1. Run automatic pre-enrichment — deterministic tool calls before
+        Hybrid policy (Option F from AGENT_DESIGN Sec.5.5):
+          1. Run automatic pre-enrichment - deterministic tool calls before
              the LLM ever sees the alert. Results go into reasoning_trace
              marked source='system' at iteration=0.
           2. Run the LLM ReAct loop. The LLM sees the pre-enrichment results
@@ -410,7 +410,7 @@ class ReActAgent:
                 raw_response = self._provider.complete(
                     self._system_prompt + "\n\n" + full_user_prompt,
                 )
-            except Exception as e:  # noqa: BLE001 — defensive boundary
+            except Exception as e:  # noqa: BLE001 - defensive boundary
                 log.error("ReAct LLM call failed at iter %d: %s", iteration, e)
                 reasoning_trace.append(ReasoningStep(
                     iteration=iteration,
@@ -453,7 +453,7 @@ class ReActAgent:
                         parse_failure_count, alert.signature[:60],
                     )
                     break
-                # Loop continues — model sees its own failed output in the
+                # Loop continues - model sees its own failed output in the
                 # next round's prompt and may correct itself.
                 continue
 
@@ -650,7 +650,7 @@ class ReActAgent:
         action = _find_first(tags, "action")
         action_input_str = _find_first(tags, "action_input")
 
-        # final_answer wins if present (model may have output both — we
+        # final_answer wins if present (model may have output both - we
         # treat final_answer as the commitment).
         if final_content is not None:
             try:
@@ -719,7 +719,7 @@ class ReActAgent:
                 ))
                 return {"kind": "parse_error"}
 
-            # Execute via registry — never raises; returns ToolResult.
+            # Execute via registry - never raises; returns ToolResult.
             tool_result = self._tools.call(
                 action,
                 action_input if isinstance(action_input, dict) else {},
@@ -774,7 +774,7 @@ class ReActAgent:
             parts.append(
                 "\nThe enrichment block below contains the FULL CONTEXT "
                 "you have access to. The agent runtime has ALREADY queried "
-                "the standard tools for this alert — you do NOT need to "
+                "the standard tools for this alert - you do NOT need to "
                 "call them again. Synthesise the facts directly into your "
                 "verdict; do NOT write '<thought>let me check ...' for "
                 "data that is right in front of you."
@@ -850,7 +850,7 @@ class ReActAgent:
             )
             parsed = _parse_classification_json(raw)
             validated = _validate_classification(parsed)
-        except Exception as e:  # noqa: BLE001 — defensive boundary
+        except Exception as e:  # noqa: BLE001 - defensive boundary
             log.error("Single-shot fallback failed for alert %s: %s", alert_id, e)
             return AlertClassification(
                 alert_id=alert_id,

@@ -120,7 +120,7 @@ def _aggregate_alert_history(
                     "timestamp_epoch": ts,
                     "signature": str(raw.get("signature", "")),
                 })
-    except Exception as e:  # noqa: BLE001 — defensive boundary; tool must not raise
+    except Exception as e:  # noqa: BLE001 - defensive boundary; tool must not raise
         log.warning("get_alert_history: disk read failed: %s", e)
 
     # --- Aggregate ---
@@ -191,7 +191,7 @@ def make_alert_history_tool(
         incident_manager: must expose get_alerts_for_ip(), get_open_incidents(),
                           get_incident_count_for_ip(), is_repeat_offender().
         storage:          must expose list_reports() returning a list of report
-                          dicts. May be None — in that case disk-side history
+                          dicts. May be None - in that case disk-side history
                           is skipped silently.
     """
     # Adapter so missing storage doesn't blow up the tool
@@ -247,7 +247,7 @@ _ENV_LOOKUP_SCHEMA: Dict[str, Any] = {
     "required": ["query"],
 }
 
-# Supported entry match types — anything else is rejected at compile time.
+# Supported entry match types - anything else is rejected at compile time.
 _VALID_MATCH_TYPES = {"exact_ip", "cidr", "url_prefix", "url_contains"}
 
 
@@ -257,7 +257,7 @@ def _compile_env_entries(
     """Validate environment entries once, at factory time.
 
     Bad entries (missing pattern, unknown match_type, malformed CIDR) are
-    logged at warning level and skipped — the tool never crashes at runtime
+    logged at warning level and skipped - the tool never crashes at runtime
     because of a config error.
 
     For CIDR entries, the ip_network is pre-compiled and cached on the
@@ -321,7 +321,7 @@ def _env_entry_matches(entry: Dict[str, Any], query: str) -> bool:
         try:
             return ipaddress.ip_address(query) in net
         except (ValueError, TypeError):
-            # Query isn't a parseable IP — not a CIDR match.
+            # Query isn't a parseable IP - not a CIDR match.
             return False
 
     if match_type == "url_prefix":
@@ -343,7 +343,7 @@ def lookup_environment_for_query(
     Returns the matched entry dict (with role / description /
     classification_hint / matched_pattern / match_type), or None if no
     match. Lets ReportGenerator derive environment facts deterministically
-    from a source IP without needing the ReAct tool path to have run —
+    from a source IP without needing the ReAct tool path to have run -
     so the rule-based suggestion generator and the LLM-suggestion filter
     keep working in single_shot mode and react+no-enrich mode.
 
@@ -558,7 +558,7 @@ def _aggregate_pattern_stats(
                         classified_total += 1
                         if cls == "true_positive":
                             tp_total += 1
-    except Exception as e:  # noqa: BLE001 — defensive boundary
+    except Exception as e:  # noqa: BLE001 - defensive boundary
         log.warning("get_attack_pattern_stats: disk read failed: %s", e)
 
     out: Dict[str, Any] = {
@@ -592,7 +592,7 @@ def make_pattern_stats_tool(
     Args:
         incident_manager: must expose get_all_incidents() returning a list
                           of Incident objects (open + recently-closed).
-        storage:          must expose list_reports(). May be None — in that
+        storage:          must expose list_reports(). May be None - in that
                           case observed_true_positive_rate is always None
                           and disk-side counts are skipped.
     """

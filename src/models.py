@@ -21,7 +21,7 @@ from log_monitor import AlertRecord
 
 
 # ---------------------------------------------------------------------------
-# ReasoningStep — one iteration of the ReAct loop (agentic mode)
+# ReasoningStep - one iteration of the ReAct loop (agentic mode)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -32,12 +32,12 @@ class ReasoningStep:
     AlertClassification.reasoning_trace as None.
 
     Captured for two purposes:
-      1. Dashboard display — shows the marker / user how the agent reasoned.
-      2. Evaluation — lets us audit when the agent uses tools and why.
+      1. Dashboard display - shows the marker / user how the agent reasoned.
+      2. Evaluation - lets us audit when the agent uses tools and why.
 
     `source` distinguishes who issued the step:
-      - "model"  → emitted by the LLM during the ReAct loop
-      - "system" → automatic pre-enrichment done deterministically by the
+      - "model"  -> emitted by the LLM during the ReAct loop
+      - "system" -> automatic pre-enrichment done deterministically by the
                    agent before the LLM call (Option F hybrid policy).
 
     `iteration = 0` is the convention for system-driven enrichment steps;
@@ -123,7 +123,7 @@ class SignatureHit:
 
 
 # ---------------------------------------------------------------------------
-# Incident — the domain object tracked by IncidentManager
+# Incident - the domain object tracked by IncidentManager
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -196,7 +196,7 @@ class Incident:
 
 
 # ---------------------------------------------------------------------------
-# IncidentReport — serialised output matching the report template
+# IncidentReport - serialised output matching the report template
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -238,7 +238,7 @@ class AlertAnalysis:
     classification_status: str = "complete" # complete | error
 
     # ReAct agent metadata (None / defaults when produced by single-shot path).
-    # The reasoning_trace is what the dashboard renders in the timeline view —
+    # The reasoning_trace is what the dashboard renders in the timeline view -
     # without it, the agentic story is invisible to the user / marker.
     reasoning_trace: Optional[List[ReasoningStep]] = None
     agent_mode: str = "single_shot"         # "single_shot" | "react"
@@ -342,7 +342,7 @@ def extract_attack_type(signature: str, signature_id: Optional[int] = None) -> s
 
     s = signature.upper()
 
-    # Order matters — check specific before generic
+    # Order matters - check specific before generic
     if "SQL INJECTION" in s or "SQLI" in s or "UNION SELECT" in s:
         return "SQLi"
     if "XSS" in s or "CROSS SITE SCRIPTING" in s or "CROSS-SITE SCRIPTING" in s:

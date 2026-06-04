@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Make src/ imports work from anywhere — tests/ sits one level below src/.
+# Make src/ imports work from anywhere - tests/ sits one level below src/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
@@ -416,7 +416,7 @@ def test_parse_failure_exhausts_retries_falls_back() -> None:
     )
     cls = agent.classify(_make_alert())
 
-    _assert(cls.status == "partial", "partial — fallback after react failures",
+    _assert(cls.status == "partial", "partial - fallback after react failures",
             cls.status)
     _assert(cls.parse_failure_count == 2, "both parse failures recorded",
             str(cls.parse_failure_count))
@@ -560,7 +560,7 @@ def test_fallback_failure_returns_error_classification() -> None:
 
 
 def test_empty_tool_registry_works() -> None:
-    _section("ReActAgent: empty tool registry — direct final_answer still works")
+    _section("ReActAgent: empty tool registry - direct final_answer still works")
 
     provider = MockProvider([_final_answer_xml()])
     agent = _make_agent(provider, _empty_registry(), max_iterations=3)
@@ -816,7 +816,7 @@ def test_enrichment_cache_per_attack_type_separate() -> None:
 
     # SQLi alert from one IP
     agent.classify(_make_alert(src_ip="10.0.0.1", signature="SQL Injection"))
-    # XSS alert from same IP — history+env cached, stats fresh
+    # XSS alert from same IP - history+env cached, stats fresh
     cls_xss = agent.classify(_make_alert(src_ip="10.0.0.1", signature="XSS"))
 
     system_steps = [s for s in cls_xss.reasoning_trace if s.source == "system"]

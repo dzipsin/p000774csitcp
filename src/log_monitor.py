@@ -41,7 +41,7 @@ class AlertRecord:
     timestamp_epoch: float      # POSIX seconds; use for ordering / bucketing
 
     # --- Severity ---
-    severity_level: int         # Suricata native: 1=critical … 4=informational
+    severity_level: int         # Suricata native: 1=critical ... 4=informational
     severity_label: str         # "critical" | "high" | "low"
 
     # --- Network tuple ---
@@ -49,7 +49,7 @@ class AlertRecord:
     src_port: str               # str to accommodate "?" on parse failure
     dst_ip: str
     dst_port: str
-    proto: str                  # "TCP" | "UDP" | "ICMP" | …
+    proto: str                  # "TCP" | "UDP" | "ICMP" | ...
 
     # --- Signature ---
     signature: str
@@ -59,7 +59,7 @@ class AlertRecord:
 
     # --- Flow context (may be empty strings / 0 if not present) ---
     flow_id: int                # Suricata flow_id for correlation; 0 if absent
-    app_proto: str              # "http" | "tls" | "dns" | … | ""
+    app_proto: str              # "http" | "tls" | "dns" | ... | ""
     in_iface: str               # capturing interface name
 
     # --- Full original event for extensibility ---
@@ -69,8 +69,8 @@ class AlertRecord:
         """Serialise to a plain dict (JSON-safe, raw_event excluded).
 
         HTTP context from raw_event (url, method, status) is FLATTENED into
-        top-level keys so downstream consumers — notably the template
-        serializer — can read it without seeing the raw event blob.
+        top-level keys so downstream consumers - notably the template
+        serializer - can read it without seeing the raw event blob.
         """
         d = asdict(self)
         raw_event = d.pop("raw_event", None) or {}
@@ -83,7 +83,7 @@ class AlertRecord:
 
 
 
-_SEVERITY_MAP = {1: "critical", 2: "high"}   # Suricata severity 3+ → "low"
+_SEVERITY_MAP = {1: "critical", 2: "high"}   # Suricata severity 3+ -> "low"
 
 
 def _parse_line(line: str) -> Optional[AlertRecord]:

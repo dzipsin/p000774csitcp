@@ -19,7 +19,7 @@ Usage:
 
 The --order argument matters: configs are listed in the report in that
 order so the staircase narrative reads correctly. Each comma-separated
-value should match the `step` field of one config_dimensions block — see
+value should match the `step` field of one config_dimensions block -see
 docs/RUNBOOK Phase 6 procedure for the conventional labels.
 """
 
@@ -75,7 +75,7 @@ def order_runs(
 
     A run is matched to a step by looking at:
       1. config_dimensions["step"]  (canonical, if present)
-      2. label                       (fallback — best-effort prefix match)
+      2. label                       (fallback -best-effort prefix match)
 
     Runs that don't match any step go to the end with a warning. Within a
     step, runs are sorted by timestamp ascending.
@@ -170,11 +170,11 @@ def aggregate_step_metrics(
 # ---------------------------------------------------------------------------
 
 _HUMAN_STEP_LABELS = {
-    "baseline":     "Baseline — llama3.2:3b / single-shot / no enrichment / default rules",
-    "model_swap":   "+ Model swap — qwen2.5:3b / single-shot / no enrichment / default rules",
-    "react":        "+ ReAct loop — qwen2.5:3b / react / no enrichment / default rules",
-    "enrich":       "+ Auto-enrichment — qwen2.5:3b / react / enrichment ON / default rules",
-    "custom_rules": "+ Custom XSS rules — qwen2.5:3b / react / enrichment ON / custom rules",
+    "baseline":     "Baseline -llama3.2:3b / single-shot / no enrichment / default rules",
+    "model_swap":   "+ Model swap -qwen2.5:3b / single-shot / no enrichment / default rules",
+    "react":        "+ ReAct loop -qwen2.5:3b / react / no enrichment / default rules",
+    "enrich":       "+ Auto-enrichment -qwen2.5:3b / react / enrichment ON / default rules",
+    "custom_rules": "+ Custom XSS rules -qwen2.5:3b / react / enrichment ON / custom rules",
 }
 
 
@@ -214,21 +214,21 @@ def render_markdown(
         aggregated.append(agg)
 
     lines: List[str] = []
-    lines.append("# Combined evaluation — staircase ablation\n")
+    lines.append("# Combined evaluation -staircase ablation\n")
     lines.append(
         "Each row adds one capability to the prior row. Metrics are means "
         "across 3 reps unless noted otherwise. Delta column reports the "
         "change in F1 vs the previous row (positive = improvement).\n"
     )
     lines.append("## Summary table\n")
-    lines.append("| Step | Reps | Precision | Recall | F1 | Accuracy | ΔF1 |")
+    lines.append("| Step | Reps | Precision | Recall | F1 | Accuracy | dF1 |")
     lines.append("|------|------|-----------|--------|----|----------|-----|")
 
     prev_f1: Optional[float] = None
     for agg in aggregated:
         delta = (
             f"{agg['f1_mean'] - prev_f1:+.3f}"
-            if prev_f1 is not None else "—"
+            if prev_f1 is not None else "-"
         )
         lines.append(
             f"| {agg['label_text']} | {agg['reps']} | "
@@ -287,7 +287,7 @@ def parse_args():
         "--order",
         default="baseline,model_swap,react,enrich,custom_rules",
         help=(
-            "Comma-separated step order — controls the row order of the "
+            "Comma-separated step order -controls the row order of the "
             "ablation table. Must match the `step` field passed to each "
             "run via --config-dim."
         ),

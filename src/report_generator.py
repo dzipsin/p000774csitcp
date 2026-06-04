@@ -2,7 +2,7 @@
 report_generator.py - Produces IncidentReports from Incidents via two-stage LLM pipeline.
 
 Pipeline:
-  Stage 1 (per-alert): classify each alert — true/false positive, severity,
+  Stage 1 (per-alert): classify each alert - true/false positive, severity,
                        recommendation, reasoning. N LLM calls per incident.
   Stage 2 (incident):  narrative summary, attack vectors, attack stage,
                        recommendations, exposure assessment. 1 LLM call.
@@ -20,9 +20,9 @@ Design principles:
     to treat alert data fields as untrusted content.
 
 Depends on:
-  models.*                     — dataclasses
-  model_provider.ModelProvider — LLM backend abstraction
-  report_db.ReportDatabase     — SQLite-backed persistence
+  models.*                     - dataclasses
+  model_provider.ModelProvider - LLM backend abstraction
+  report_db.ReportDatabase     - SQLite-backed persistence
 
 The frontend consumes the per-incident output of this module via
 /api/incidents/*; there is no batch-mode classification path any more.
@@ -80,7 +80,7 @@ CLASSIFICATION RULES:
   Examples: routine internal service communication, normal database traffic,
   scanner noise, legitimate traffic misidentified by broad rules.
 
-SEVERITY SCALE (matches the custom Suricata rule tiers — P1/P2/P3):
+SEVERITY SCALE (matches the custom Suricata rule tiers - P1/P2/P3):
 - "critical": confirmed exploit behaviour. Active data extraction, authentication
   bypass, OS command execution, or cookie exfiltration. Immediate response.
 - "high": clear injection / XSS structure showing attacker intent even when
@@ -137,7 +137,7 @@ Based on the incident data below, produce a JSON object with these fields:
   "overview": "3-5 sentence narrative summarising the incident",
   "attack_vectors": ["list of vectors used, e.g. 'URL parameter', 'form field', 'HTTP header'"],
   "overall_attack_stage": "one MITRE ATT&CK tactic name",
-  "ai_suggestions": ["2-4 SPECIFIC, ACTIONABLE recommendations — see rules below"],
+  "ai_suggestions": ["2-4 SPECIFIC, ACTIONABLE recommendations - see rules below"],
   "exposure_detected": true or false,
   "exposure_types": ["what categories of data may be exposed, e.g. 'user credentials', 'database schema'"],
   "affected_systems": ["systems or components potentially affected"],
@@ -145,22 +145,22 @@ Based on the incident data below, produce a JSON object with these fields:
   "impact_assessment": "2-3 sentences on potential business or operational impact"
 }}
 
-AI_SUGGESTIONS — strict rules:
+AI_SUGGESTIONS - strict rules:
 Each suggestion MUST contain (a) a specific action verb, (b) a concrete
 target referenced from the incident data (IP, signature, endpoint,
 account, timestamp), and (c) a reason citing enrichment context (prior
 alert count, environment role, observed payload).
 
 GOOD examples:
-  - "Block 192.168.56.1 at the WAF — repeat offender with 14 prior SQLi
+  - "Block 192.168.56.1 at the WAF - repeat offender with 14 prior SQLi
      alerts in last 24h."
   - "Investigate session tokens issued to /vulnerabilities/xss_r/
-     between 17:38 and 17:39 UTC — reflected XSS payload may have stolen
+     between 17:38 and 17:39 UTC - reflected XSS payload may have stolen
      them."
   - "Tune Suricata to suppress ET SCAN inbound to MySQL when both src
-     and dst are within 172.18.0.0/16 — documented internal traffic."
+     and dst are within 172.18.0.0/16 - documented internal traffic."
 
-BAD examples (DO NOT produce these — they will be dropped):
+BAD examples (DO NOT produce these - they will be dropped):
   - "Implement additional security controls for the source IP." (no
      verb specifying the action, no target, no reason)
   - "Review and update application code." (vague verb, no specifics)
@@ -206,7 +206,7 @@ INCIDENT DATA:
 - Top signatures: {top_signatures}
 - Targeted endpoints: {endpoints}
 
-ENRICHMENT CONTEXT (from Stage 1 agent — already factored into per-alert
+ENRICHMENT CONTEXT (from Stage 1 agent - already factored into per-alert
 verdicts, included here so your narrative can reference it concretely):
 {enrichment_summary}
 
@@ -222,7 +222,7 @@ Respond with ONLY the JSON object. No markdown. No prose around it."""
 
 _VALID_CLASSIFICATIONS = {"true_positive", "likely_false_positive"}
 # Severity scale matches the custom Suricata rule priority tiers
-# (P1 = critical, P2 = high, P3 = low). No medium tier — neither the
+# (P1 = critical, P2 = high, P3 = low). No medium tier - neither the
 # Suricata rules nor the dashboard render one.
 _VALID_SEVERITIES = {"critical", "high", "low"}
 _VALID_RECOMMENDATIONS = {"block_source_ip", "escalate_tier2", "continue_monitoring"}
@@ -262,7 +262,7 @@ def _validate_stage1_response(data: dict) -> dict:
         )
     data["classification"] = classification
 
-    # Severity — fold common model dialects into the canonical lowercase
+    # Severity - fold common model dialects into the canonical lowercase
     # tier names. "medium" is a relic from a previous 4-tier scale; we
     # bucket it to "high" since that's where the Suricata P2 rules sit.
     severity_raw = str(data.get("severity", "")).strip().lower()
@@ -429,21 +429,21 @@ def _confidence_score(alert: AlertRecord, classification: Optional[AlertClassifi
 
     raw = alert.raw_event or {}
 
-    # HTTP context present → clearer picture
+    # HTTP context present -> clearer picture
     if isinstance(raw.get("http"), dict) and raw["http"].get("url"):
         score += 0.15
 
-    # MITRE mapping → high-confidence signature
+    # MITRE mapping -> high-confidence signature
     alert_meta = raw.get("alert", {}).get("metadata", {}) if isinstance(raw.get("alert"), dict) else {}
     if "mitre_technique_name" in alert_meta:
         score += 0.2
 
-    # Known attack type (not "Other") → classifier had a hit
+    # Known attack type (not "Other") -> classifier had a hit
     attack_type = extract_attack_type(alert.signature, alert.signature_id)
     if attack_type != "Other":
         score += 0.1
 
-    # Suricata internal severity 1 or 2 → strong rule match
+    # Suricata internal severity 1 or 2 -> strong rule match
     if alert.severity_level in (1, 2):
         score += 0.05
 
@@ -586,7 +586,7 @@ def _template_stage2_output(
         overview_parts.append(f"Detected attack types: {', '.join(detected_attacks)}.")
     overview = " ".join(overview_parts)
 
-    # Attack vectors — inferred from alert data
+    # Attack vectors - inferred from alert data
     vectors: List[str] = []
     for alert in incident.alerts:
         http = (alert.raw_event or {}).get("http", {})
@@ -600,7 +600,7 @@ def _template_stage2_output(
     if not vectors:
         vectors = ["unspecified"]
 
-    # Attack stage — pick based on attack types
+    # Attack stage - pick based on attack types
     stage = "Reconnaissance"
     if any(a in detected_attacks for a in ("SQLi", "XSS", "CommandInjection", "PathTraversal")):
         stage = "Initial Access"
@@ -609,7 +609,7 @@ def _template_stage2_output(
     suggestions: List[str] = []
     if high_tp_ips:
         suggestions.append(
-            f"Block source IP(s) {', '.join(high_tp_ips)} — "
+            f"Block source IP(s) {', '.join(high_tp_ips)} - "
             "confirmed high-severity attack traffic."
         )
     if tp_count > 0:
@@ -623,7 +623,7 @@ def _template_stage2_output(
     suggestions.append("Continue monitoring for follow-up activity from this source.")
 
     # Exposure: only flag exposure when at least one true positive sits at
-    # the critical or high tier — low-tier TPs are detection signals but
+    # the critical or high tier - low-tier TPs are detection signals but
     # don't on their own imply confirmed exposure.
     exposure_detected = tp_count > 0 and any(
         c.severity in ("critical", "high")
@@ -682,7 +682,7 @@ class ReportGenerator:
         incident_manager.set_regenerate_callback(generator.generate)
 
     Thread safety: generate() is safe to call from multiple threads because
-    the generator itself is stateless — state lives in the Incident (passed in)
+    the generator itself is stateless - state lives in the Incident (passed in)
     and the Storage (thread-safe).
     """
 
@@ -720,7 +720,7 @@ class ReportGenerator:
                          LLM-suggestion filter to derive env facts from
                          the incident's source_ip even when auto_enrichment
                          is off (i.e. single_shot or react+no-enrich modes).
-                         Optional — when None, fallback is disabled and
+                         Optional - when None, fallback is disabled and
                          filters operate on whatever the reasoning trace
                          contains.
         """
@@ -737,7 +737,7 @@ class ReportGenerator:
             agent_mode = "single_shot"
         if agent_mode == "react" and react_agent is None:
             log.warning(
-                "agent_mode='react' but no react_agent supplied — "
+                "agent_mode='react' but no react_agent supplied - "
                 "falling back to single_shot",
             )
             agent_mode = "single_shot"
@@ -771,7 +771,7 @@ class ReportGenerator:
     def generate(self, incident: Incident) -> IncidentReport:
         """Produce an IncidentReport for the given Incident.
 
-        Never raises on expected failures — instead marks generation_status
+        Never raises on expected failures - instead marks generation_status
         and returns a (partial) report. This keeps the pipeline alive when
         the LLM misbehaves.
         """
@@ -828,7 +828,7 @@ class ReportGenerator:
             detected_attacks=detected_attacks,
         )
 
-        # MITRE tactic override — deterministic correction for known attack
+        # MITRE tactic override - deterministic correction for known attack
         # types the small LLM commonly mis-tags. Honest engineering:
         # rule-based for what we KNOW, LLM judgment for everything else.
         original_tactic = stage2.get("overall_attack_stage", "")
@@ -1081,7 +1081,7 @@ class ReportGenerator:
                     "Alert %s attempt %d: %s", alert_id, attempt + 1, last_error,
                 )
             except RuntimeError as e:
-                # Provider-level failure (network, timeout) — don't retry
+                # Provider-level failure (network, timeout) - don't retry
                 last_error = f"Provider error: {e}"
                 log.error("Alert %s attempt %d: %s", alert_id, attempt + 1, last_error)
                 break
@@ -1204,11 +1204,11 @@ class ReportGenerator:
                 raw = self._provider.complete_json(prompt)
                 parsed = _parse_json_response(raw)
 
-                # Basic shape validation — don't be too strict so LLM has room
+                # Basic shape validation - don't be too strict so LLM has room
                 if not isinstance(parsed, dict):
                     raise ValueError("Stage 2 response is not a dict")
 
-                # Coerce expected keys — missing ones default to empty
+                # Coerce expected keys - missing ones default to empty
                 result = {
                     "overview": str(parsed.get("overview", "")),
                     "attack_vectors": _ensure_list_of_strings(parsed.get("attack_vectors", [])),
@@ -1239,7 +1239,7 @@ class ReportGenerator:
                 break
 
         log.warning(
-            "Stage 2 LLM failed (%s) — falling back to template", last_error,
+            "Stage 2 LLM failed (%s) - falling back to template", last_error,
         )
         result = _template_stage2_output(
             incident, classifications, tp_count, fp_count, error_count, detected_attacks,
@@ -1286,7 +1286,7 @@ class ReportGenerator:
                 severity=cls.severity,
                 recommendation=cls.recommendation,
                 classification_status=cls.status,
-                # ReAct metadata — None/defaults for single-shot path
+                # ReAct metadata - None/defaults for single-shot path
                 reasoning_trace=cls.reasoning_trace,
                 agent_mode=cls.agent_mode,
                 parse_failure_count=cls.parse_failure_count,
@@ -1438,7 +1438,7 @@ class ReportGenerator:
 #      enrichment data + signatures (covers the predictable cases).
 #   2. Filter LLM-emitted suggestions to drop known generic starters.
 #   3. Merge: rule-based first, surviving LLM after, dedup'd.
-# This matches the MITRE-tactic override pattern below — rule for what we
+# This matches the MITRE-tactic override pattern below - rule for what we
 # KNOW, LLM judgment for the rest.
 
 _BANNED_SUGGESTION_STARTERS = re.compile(
@@ -1468,7 +1468,7 @@ def _extract_enrichment_facts(
 
       2. Fall back to deterministic derivation from the incident's
          source_ip. In single-shot mode (or react+no-enrich), no
-         reasoning trace exists — but the same env config used by the
+         reasoning trace exists - but the same env config used by the
          enrichment tool is available, and the IncidentManager's repeat
          offender flag is callable. Filling these in here means the
          filter + rule-based generator work IDENTICALLY across all
@@ -1526,20 +1526,20 @@ def _extract_enrichment_facts(
                     if facts["env_hint"] == "likely_false_positive_if_internal_only":
                         facts["is_internal_only"] = True
 
-        # Facts are identical across alerts in the same incident — first
+        # Facts are identical across alerts in the same incident - first
         # populated trace wins.
         if any(facts[k] for k in ("env_match_found", "is_repeat_offender")):
             break
 
     # --- Path 2: deterministic fallback from incident.source_ip ---
-    # Applied per-field — if Path 1 already set a field, leave it alone.
+    # Applied per-field - if Path 1 already set a field, leave it alone.
     if incident is not None and incident.source_ip:
         # Env lookup
         if not facts["env_match_found"] and env_entries:
             try:
                 from agent_tools import lookup_environment_for_query
                 match = lookup_environment_for_query(env_entries, incident.source_ip)
-            except ImportError:  # pragma: no cover — defensive
+            except ImportError:  # pragma: no cover - defensive
                 match = None
             if match:
                 facts["env_match_found"] = True
@@ -1550,12 +1550,12 @@ def _extract_enrichment_facts(
                 if facts["env_hint"] == "likely_false_positive_if_internal_only":
                     facts["is_internal_only"] = True
 
-        # Repeat offender — IncidentManager carries the in-session state
+        # Repeat offender - IncidentManager carries the in-session state
         if not facts["is_repeat_offender"] and repeat_offender_checker is not None:
             try:
                 if repeat_offender_checker(incident.source_ip):
                     facts["is_repeat_offender"] = True
-            except Exception:  # noqa: BLE001 — never let fallback raise
+            except Exception:  # noqa: BLE001 - never let fallback raise
                 pass
 
     return facts
@@ -1582,7 +1582,7 @@ def _generate_rule_based_suggestions(
       - Any TP -> open Tier-2 ticket
       - All FP from internal-only IP -> tune Suricata to suppress
 
-    Order matters — most operationally urgent first.
+    Order matters - most operationally urgent first.
 
     Optional `env_entries` + `repeat_offender_checker` are forwarded to
     _extract_enrichment_facts so the generator produces meaningful
@@ -1632,13 +1632,13 @@ def _generate_rule_based_suggestions(
     if has_tp and facts["is_untrusted_external"]:
         if facts["is_repeat_offender"] and facts["prior_alert_count"] > 0:
             suggestions.append(
-                f"Block {src_ip} at the perimeter firewall — repeat offender "
+                f"Block {src_ip} at the perimeter firewall - repeat offender "
                 f"with {facts['prior_alert_count']} prior alert(s) this session "
                 f"from UNTRUSTED EXTERNAL network."
             )
         else:
             suggestions.append(
-                f"Block {src_ip} at the perimeter firewall — confirmed "
+                f"Block {src_ip} at the perimeter firewall - confirmed "
                 f"{', '.join(sorted(detected_set)) or 'attack'} from "
                 f"UNTRUSTED EXTERNAL network."
             )
@@ -1648,7 +1648,7 @@ def _generate_rule_based_suggestions(
         suggestions.append(
             f"Rotate credentials for any account active between "
             f"{incident.first_seen_display} and {incident.last_seen_display} "
-            f"— SQL injection observed targeting the users table (credential "
+            f"- SQL injection observed targeting the users table (credential "
             f"exfiltration intent)."
         )
 
@@ -1656,7 +1656,7 @@ def _generate_rule_based_suggestions(
     if has_tp and xss_endpoints:
         ep_list = ", ".join(xss_endpoints[:3])
         suggestions.append(
-            f"Audit output encoding on {ep_list} — reflected XSS payload "
+            f"Audit output encoding on {ep_list} - reflected XSS payload "
             f"observed; ensure user-controlled parameters are HTML-escaped "
             f"on render and add Content-Security-Policy headers."
         )
@@ -1665,14 +1665,14 @@ def _generate_rule_based_suggestions(
     if "CommandInjection" in detected_set and has_tp:
         suggestions.append(
             "Investigate the targeted host for evidence of code execution "
-            "— payload contains shell metacharacters; check new processes, "
+            "- payload contains shell metacharacters; check new processes, "
             "modified files, outbound connections in the alert time window."
         )
 
     # --- 5. Open Tier-2 ticket for any confirmed attack ---
     if has_tp:
         suggestions.append(
-            f"Open a Tier-2 ticket for incident {incident_short} — confirmed "
+            f"Open a Tier-2 ticket for incident {incident_short} - confirmed "
             f"{', '.join(sorted(detected_set)) or 'attack'} from {src_ip}; "
             f"include the full reasoning trace from this report."
         )
@@ -1695,7 +1695,7 @@ def _generate_rule_based_suggestions(
             dominant_sig, _ = sig_counts.most_common(1)[0]
             suggestions.append(
                 f"Tune Suricata to suppress \"{dominant_sig}\" when both src "
-                f"and dst are within 172.18.0.0/16 — documented internal "
+                f"and dst are within 172.18.0.0/16 - documented internal "
                 f"traffic; all {fp_count} alert(s) classified false_positive."
             )
 
@@ -1705,7 +1705,7 @@ def _generate_rule_based_suggestions(
 def _filter_generic_llm_suggestions(suggestions: List[str]) -> List[str]:
     """Drop LLM-emitted suggestions that begin with known generic starters.
 
-    Not too aggressive — only blocks unambiguously vague verbs (the ones the
+    Not too aggressive - only blocks unambiguously vague verbs (the ones the
     model defaults to when uncertain). Specific suggestions that happen to
     contain "implement" mid-sentence are kept.
     """
@@ -1797,8 +1797,8 @@ def _dedup_near_duplicates(
     rule-based suggestion.
 
     Example: rule-based emits "Block 192.168.56.1 at the perimeter firewall
-    — ...". LLM emits "Block 192.168.56.1 at the WAF — ...". Both share
-    (Block, 192.168.56.1) — the LLM one is dropped as a near-duplicate.
+    - ...". LLM emits "Block 192.168.56.1 at the WAF - ...". Both share
+    (Block, 192.168.56.1) - the LLM one is dropped as a near-duplicate.
 
     LLM suggestions that share a verb but a different IP, or a different
     verb against the same IP, are kept (different recommendation).
@@ -1975,14 +1975,14 @@ def _summarise_enrichment(classifications: List[AlertClassification]) -> str:
     Pulls observations from the first classification's reasoning_trace whose
     `source == "system"`. We use the first classification because all alerts
     in an incident share the same source IP (and so the cached enrichment
-    results are identical) — pulling once is sufficient and keeps the
+    results are identical) - pulling once is sufficient and keeps the
     Stage 2 prompt small.
 
     Returns "(no enrichment data)" when the report was produced in
     single-shot mode or auto-enrichment was disabled.
     """
     if not classifications:
-        return "(no enrichment data — no classifications produced)"
+        return "(no enrichment data - no classifications produced)"
 
     # Find the first classification with a non-empty reasoning_trace
     trace: List = []
@@ -1991,7 +1991,7 @@ def _summarise_enrichment(classifications: List[AlertClassification]) -> str:
             trace = c.reasoning_trace
             break
     if not trace:
-        return "(no enrichment data — single-shot or auto-enrichment disabled)"
+        return "(no enrichment data - single-shot or auto-enrichment disabled)"
 
     lines: List[str] = []
     for step in trace:
@@ -2043,7 +2043,7 @@ def _summarise_enrichment(classifications: List[AlertClassification]) -> str:
             lines.append(f"- {step.action}: {obs_text[:160]}")
 
     if not lines:
-        return "(no enrichment data — no system steps in trace)"
+        return "(no enrichment data - no system steps in trace)"
     return "\n".join(lines)
 
 

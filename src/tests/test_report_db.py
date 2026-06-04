@@ -247,7 +247,7 @@ def test_clear_all_drops_everything():
         count = db.clear_all()
         assert count == 5, f"expected 5 cleared, got {count}"
         assert len(db.list_reports()) == 0
-        # Cascade — alerts table should be empty too
+        # Cascade - alerts table should be empty too
         rows = db._connection().execute(
             "SELECT COUNT(*) AS n FROM alerts;"
         ).fetchone()
@@ -410,7 +410,7 @@ def test_retention_sweeper_starts_and_stops():
             "expected the initial sweep to drop the expired row"
         )
 
-        # Insert a fresh row — should survive
+        # Insert a fresh row - should survive
         db.save(_make_report(incident_id="fresh_for_sweeper"))
         time.sleep(1.2)   # let the sweeper tick once more
         ids = [r["incident_summary"]["incident_id"] for r in db.list_reports()]

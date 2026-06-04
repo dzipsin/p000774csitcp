@@ -236,7 +236,7 @@ def create_provider(config: ModelConfig) -> ModelProvider:
 
         cfg = ModelConfig(provider=ProviderType.OLLAMA, model="llama3")
         provider = create_provider(cfg)
-        response = provider.complete("Explain this alert …")
+        response = provider.complete("Explain this alert ...")
 
     Raises:
         ValueError if config.provider is not a known ProviderType.

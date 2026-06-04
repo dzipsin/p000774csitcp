@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 
 
 # Type alias for the regeneration callback: receives an Incident snapshot.
-# Implementations should be idempotent — this callback may be invoked multiple
+# Implementations should be idempotent - this callback may be invoked multiple
 # times for the same incident as alerts continue to arrive. Return value is
 # ignored by the manager, so we accept Any (covers both None and IncidentReport).
 RegenerateCallback = Callable[[Incident], Any]
@@ -60,7 +60,7 @@ class IncidentManager:
         manager.stop()
     """
 
-    # Alerts with these source IPs are dropped — they provide no grouping value
+    # Alerts with these source IPs are dropped - they provide no grouping value
     _INVALID_SOURCE_IPS = {"", "?", "0.0.0.0", "::"}
 
     def __init__(
@@ -103,7 +103,7 @@ class IncidentManager:
         # queue follow-up regenerations without overlap.
         self._regenerating: set[str] = set()
 
-        # Pending regeneration flags — if True, another regeneration is needed
+        # Pending regeneration flags - if True, another regeneration is needed
         # as soon as the current one finishes.
         self._pending_regenerate: set[str] = set()
 
@@ -183,7 +183,7 @@ class IncidentManager:
     # ------------------------------------------------------------------
 
     def process_alert(self, alert: AlertRecord) -> None:
-        """Main entry point — call this for each new alert.
+        """Main entry point - call this for each new alert.
 
         Safe to call from any thread. Fast: returns after bookkeeping;
         regeneration happens asynchronously via the debounce timer.
@@ -446,7 +446,7 @@ class IncidentManager:
         # Trigger final regenerations outside the lock
         if final:
             for inc in to_close:
-                # Direct synchronous call — this is shutdown, we want it done
+                # Direct synchronous call - this is shutdown, we want it done
                 self._trigger_regenerate_sync(inc)
 
     # ------------------------------------------------------------------
@@ -497,7 +497,7 @@ class IncidentManager:
 
             if incident is None:
                 log.debug(
-                    "Debounce fired for %s but incident is no longer open — skipping",
+                    "Debounce fired for %s but incident is no longer open - skipping",
                     incident_id,
                 )
                 return
@@ -517,10 +517,10 @@ class IncidentManager:
         """
         with self._lock:
             if incident_id in self._regenerating:
-                # Already running — flag for another pass
+                # Already running - flag for another pass
                 self._pending_regenerate.add(incident_id)
                 log.debug(
-                    "Regen already in progress for %s — queuing follow-up",
+                    "Regen already in progress for %s - queuing follow-up",
                     incident_id,
                 )
                 return
@@ -528,7 +528,7 @@ class IncidentManager:
             # Mark as running
             self._regenerating.add(incident_id)
 
-        # Spawn a worker thread — don't block the caller
+        # Spawn a worker thread - don't block the caller
         worker = threading.Thread(
             target=self._regenerate_worker,
             args=(incident_id,),
@@ -576,7 +576,7 @@ class IncidentManager:
                     self._pending_regenerate.discard(incident_id)
 
             if queued:
-                log.debug("Queued regen for %s — firing another pass", incident_id)
+                log.debug("Queued regen for %s - firing another pass", incident_id)
                 self._trigger_regenerate(incident_id)
 
     def _trigger_regenerate_sync(self, incident: Incident) -> None:
@@ -611,7 +611,7 @@ class IncidentManager:
     def _sweep_loop(self) -> None:
         """Background loop that closes expired incidents.
 
-        Runs independently of alert arrivals — catches incidents that would
+        Runs independently of alert arrivals - catches incidents that would
         otherwise linger because no new alerts are coming in to trigger the
         expiry check in process_alert().
         """

@@ -26,7 +26,7 @@ import sys
 import time
 from pathlib import Path
 
-# Make src/ imports work from anywhere — tests/ sits one level below src/.
+# Make src/ imports work from anywhere - tests/ sits one level below src/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
@@ -46,7 +46,7 @@ _received_regenerations: list[tuple[str, int, int]] = []  # (incident_id, versio
 
 
 def _record_regen(incident: Incident) -> None:
-    """Test callback — records the regen event."""
+    """Test callback - records the regen event."""
     _received_regenerations.append(
         (incident.incident_id, incident.report_version, incident.alert_count)
     )
@@ -422,7 +422,7 @@ def test_force_regenerate_includes_recently_closed() -> None:
     )
     pre_force = len(_received_regenerations)
 
-    # Force regen with no open incidents — should still regenerate the
+    # Force regen with no open incidents - should still regenerate the
     # recently-closed one (new behaviour per P4 follow-up).
     count = mgr.force_regenerate_all()
     assert count >= 1, (

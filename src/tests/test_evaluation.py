@@ -72,7 +72,7 @@ class ScenarioAwareProvider(ModelProvider):
         scenario = find_scenario(eval_id) if eval_id else None
 
         if scenario is None:
-            # Unknown scenario — default to "true_positive high"
+            # Unknown scenario - default to "true_positive high"
             return json.dumps({
                 "classification": "true_positive",
                 "severity": "high",
@@ -478,11 +478,11 @@ def test_combined_report_builds_staircase():
                                    "fp_correct": 0, "classification_errors": 0},
                        "confusion_matrix": {}, "scenario_results": []}, f)
 
-        # Load with prefix filter — should return 9 runs, not 10
+        # Load with prefix filter - should return 9 runs, not 10
         runs = load_raw_results(indir, label_prefix="p6_")
         assert len(runs) == 9, f"expected 9 prefixed runs, got {len(runs)}"
 
-        # Order them — staircase order
+        # Order them - staircase order
         order = ["baseline", "react", "custom_rules"]
         ordered = order_runs(runs, order)
         assert len(ordered) == 9
