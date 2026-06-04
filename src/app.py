@@ -124,7 +124,6 @@ AGENT_MODE              = str(_agent_cfg.get("mode", "single_shot")).lower()
 AGENT_MAX_ITERATIONS    = int(_agent_cfg.get("max_iterations", 3))
 AGENT_TOOL_TIMEOUT      = float(_agent_cfg.get("tool_timeout_seconds", 5.0))
 AGENT_TOTAL_BUDGET      = float(_agent_cfg.get("total_budget_seconds", 30.0))
-AGENT_TRACE_ENABLED     = bool(_agent_cfg.get("reasoning_trace_enabled", True))
 AGENT_AUTO_ENRICHMENT   = bool(_agent_cfg.get("auto_enrichment", True))
 
 _agent_tools_cfg        = _agent_cfg.get("tools", {})
