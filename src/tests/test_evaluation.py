@@ -21,7 +21,8 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# tests/ sits one level below src/, so reach up twice for the import root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
 from incident_manager import IncidentManager
@@ -71,15 +72,17 @@ class ScenarioAwareProvider(ModelProvider):
         scenario = find_scenario(eval_id) if eval_id else None
 
         if scenario is None:
-            # Unknown scenario — default to "true_positive High"
+            # Unknown scenario — default to "true_positive high"
             return json.dumps({
                 "classification": "true_positive",
-                "severity": "High",
+                "severity": "high",
                 "summary": "unknown test scenario",
                 "recommendation": "escalate_tier2",
                 "reasoning": "no matching eval_id",
             })
 
+        # Only auto-block at the critical tier (P1 equivalent). High tier still
+        # warrants escalation but not an immediate block from a mock.
         return json.dumps({
             "classification": scenario.expected_classification,
             "severity": scenario.expected_severity,
@@ -87,7 +90,7 @@ class ScenarioAwareProvider(ModelProvider):
             "recommendation": (
                 "block_source_ip"
                 if scenario.expected_classification == "true_positive"
-                and scenario.expected_severity == "High"
+                and scenario.expected_severity == "critical"
                 else "escalate_tier2"
                 if scenario.expected_classification == "true_positive"
                 else "continue_monitoring"
@@ -152,8 +155,15 @@ def _synthetic_alert_for(scenario) -> AlertRecord:
         timestamp_raw=time.strftime("%Y-%m-%dT%H:%M:%S"),
         timestamp_display=time.strftime("%H:%M:%S"),
         timestamp_epoch=time.time(),
-        severity_level=1 if scenario.expected_severity == "High" else 2 if scenario.expected_severity == "Medium" else 3,
-        severity_label=scenario.expected_severity.lower() if scenario.expected_severity else "low",
+        # Suricata-style severity_level: 1 = critical, 2 = high, 3 = low.
+        # expected_severity already uses the lowercase 3-tier scale, so the
+        # severity_label is a straight passthrough.
+        severity_level=(
+            1 if scenario.expected_severity == "critical"
+            else 2 if scenario.expected_severity == "high"
+            else 3
+        ),
+        severity_label=scenario.expected_severity or "low",
         src_ip="192.168.56.1",
         src_port="54321",
         dst_ip="172.18.0.2",
@@ -182,9 +192,9 @@ def _synthetic_alert_for(scenario) -> AlertRecord:
 # ============================================================================
 
 def test_scenarios_fire_and_correlate():
-    print("\n=== Test 1: Synthetic fire → IncidentManager → ReportGenerator → correlate ===")
+    print("\n=== Test 1: Synthetic fire -> IncidentManager -> ReportGenerator -> correlate ===")
 
-    from storage import ReportStorage
+    from report_db import ReportDatabase
     import tempfile
 
     storage_dir = tempfile.mkdtemp(prefix="eval-test-")
@@ -203,9 +213,15 @@ def test_scenarios_fire_and_correlate():
         def capture(report):
             reports_captured.append(report)
 
+        # retention_days=0 disables the background sweeper; we don't want a
+        # daemon thread firing inside a short-lived test.
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         generator = ReportGenerator(
             provider=provider,
-            storage=ReportStorage(storage_dir),
+            storage=storage,
             summary_mode="template",  # avoid relying on the mock for stage 2
             max_retries=0,
             on_report_ready=capture,
@@ -288,7 +304,7 @@ def test_metrics_computation():
     # Build synthetic scenario_results that exercise every metric
     from evaluation.scenarios import Scenario
 
-    def sr(expected, predicted, severity_exp="High", severity_act="High"):
+    def sr(expected, predicted, severity_exp="critical", severity_act="critical"):
         scenario = Scenario(
             eval_id=f"test_{id(predicted)}",
             category="SQLi",
@@ -366,7 +382,7 @@ def test_report_writer():
         method="GET",
         path="/",
         expected_classification="true_positive",
-        expected_severity="High",
+        expected_severity="critical",
         expected_attack_type="SQLi",
     )
     fr = FireResult(
@@ -378,7 +394,7 @@ def test_report_writer():
     result.status = "matched"
     result.classification = {
         "classification": "true_positive",
-        "severity": "High",
+        "severity": "critical",
         "attack_type": "SQLi",
         "confidence_score": 0.9,
         "status": "complete",
@@ -404,11 +420,104 @@ def test_report_writer():
     print(f"    PASS: report written ({len(content)} chars)")
 
 
+def test_combined_report_builds_staircase():
+    print("\n=== Test 4: Combined ablation report builds across mock runs ===")
+
+    import tempfile
+    from evaluation.run_combined_report import (
+        load_raw_results,
+        order_runs,
+        aggregate_step_metrics,
+        render_markdown,
+    )
+
+    indir = Path(tempfile.mkdtemp(prefix="combined-eval-"))
+    try:
+        # Synthesise 3 reps for each of 3 steps. Metrics improve across
+        # the staircase so the delta column should read positive.
+        steps = [
+            ("baseline",     0.80, 0.70, 0.75, 0.78),
+            ("react",        0.90, 0.85, 0.87, 0.86),
+            ("custom_rules", 0.95, 0.95, 0.95, 0.93),
+        ]
+
+        for step, precision, recall, f1, accuracy in steps:
+            for rep in range(3):
+                fname = f"p6_{step}_run{rep}_20260518_raw.json"
+                payload = {
+                    "label": f"p6_{step}_run{rep}",
+                    "timestamp": f"2026-05-18T10:{rep:02d}:00",
+                    "config": {"base_url": "x", "dashboard": "y", "repeats": 1,
+                               "settle_time": 30, "final_wait": 45},
+                    "config_dimensions": {"step": step,
+                                          "model": "qwen2.5:3b",
+                                          "agent_mode": "react"},
+                    "metrics": {
+                        "precision": precision,
+                        "recall": recall,
+                        "f1": f1,
+                        "accuracy": accuracy,
+                        "total_scenarios": 30,
+                        "matched_to_incident": 25,
+                        "tp_correct": 18,
+                        "fp_correct": 7,
+                        "classification_errors": 0,
+                    },
+                    "confusion_matrix": {},
+                    "scenario_results": [],
+                }
+                with open(indir / fname, "w", encoding="utf-8") as f:
+                    json.dump(payload, f)
+
+        # Add an unrelated run to confirm label_prefix filtering works
+        with open(indir / "other_unrelated_raw.json", "w", encoding="utf-8") as f:
+            json.dump({"label": "other", "timestamp": "x", "config": {},
+                       "metrics": {"precision": 0.0, "recall": 0.0, "f1": 0.0,
+                                   "accuracy": 0.0, "total_scenarios": 0,
+                                   "matched_to_incident": 0, "tp_correct": 0,
+                                   "fp_correct": 0, "classification_errors": 0},
+                       "confusion_matrix": {}, "scenario_results": []}, f)
+
+        # Load with prefix filter — should return 9 runs, not 10
+        runs = load_raw_results(indir, label_prefix="p6_")
+        assert len(runs) == 9, f"expected 9 prefixed runs, got {len(runs)}"
+
+        # Order them — staircase order
+        order = ["baseline", "react", "custom_rules"]
+        ordered = order_runs(runs, order)
+        assert len(ordered) == 9
+
+        # Aggregate one step
+        baseline_runs = [r for r in ordered
+                         if (r.get("config_dimensions") or {}).get("step") == "baseline"]
+        agg = aggregate_step_metrics(baseline_runs)
+        assert agg["reps"] == 3
+        assert abs(agg["f1_mean"] - 0.75) < 1e-9, f"f1_mean={agg['f1_mean']}"
+
+        # Render
+        outpath = indir / "combined.md"
+        render_markdown(ordered, order, outpath)
+        assert outpath.exists(), "combined report not written"
+        content = outpath.read_text(encoding="utf-8")
+        assert "staircase ablation" in content.lower(), "header missing"
+        assert "Baseline" in content, "baseline row missing"
+        assert "+ ReAct" in content, "react row missing"
+        assert "+ Custom XSS" in content, "custom_rules row missing"
+        # Delta column should show a positive change for react step
+        assert "+0.120" in content, f"expected +0.120 F1 delta, content was: {content[:500]}"
+
+        print(f"    PASS: combined report rendered ({len(content)} chars)")
+    finally:
+        import shutil
+        shutil.rmtree(indir, ignore_errors=True)
+
+
 def main():
     tests = [
         test_scenarios_fire_and_correlate,
         test_metrics_computation,
         test_report_writer,
+        test_combined_report_builds_staircase,
     ]
     failed = []
     for t in tests:

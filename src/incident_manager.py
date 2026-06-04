@@ -198,7 +198,7 @@ class IncidentManager:
             return
 
         arrival_time = time.time()
-        attack_type = extract_attack_type(alert.signature)
+        attack_type = extract_attack_type(alert.signature, alert.signature_id)
         group_key = self._compute_group_key(src_ip, attack_type)
 
         with self._lock:
@@ -239,14 +239,20 @@ class IncidentManager:
             self._reset_debounce_timer_locked(incident)
 
     def force_regenerate_all(self) -> int:
-        """Immediately regenerate all open incidents, bypassing debounce.
+        """Immediately regenerate all in-memory incidents, bypassing debounce.
 
-        Useful for the "Force Regenerate" button. Returns the count of
-        incidents for which regeneration was triggered.
+        Regenerates BOTH open and recently-closed incidents. Useful when the
+        operator changes the prompt / model / config and wants to re-run
+        classification against incidents that have already closed (which
+        otherwise live in `_recently_closed` until evicted by the sweeper).
+
+        Returns the count of incidents for which regeneration was triggered.
         """
         with self._lock:
             open_incidents = list(self._open_incidents.values())
-            # Cancel pending debounce timers for these incidents
+            closed_incidents = list(self._recently_closed.values())
+            # Cancel pending debounce timers for open incidents only
+            # (closed ones don't have active timers)
             for inc in open_incidents:
                 timer = self._debounce_timers.pop(inc.incident_id, None)
                 if timer is not None:
@@ -256,10 +262,16 @@ class IncidentManager:
                         pass
 
         # Fire regenerations outside the lock
-        for inc in open_incidents:
+        all_incidents = open_incidents + closed_incidents
+        for inc in all_incidents:
             self._trigger_regenerate(inc.incident_id)
 
-        return len(open_incidents)
+        log.info(
+            "force_regenerate_all triggered for %d incidents "
+            "(%d open + %d recently-closed)",
+            len(all_incidents), len(open_incidents), len(closed_incidents),
+        )
+        return len(all_incidents)
 
     def get_open_incidents(self) -> List[Incident]:
         """Return a snapshot list of currently open incidents."""
@@ -267,14 +279,6 @@ class IncidentManager:
             # Return shallow copies so callers don't see later mutations.
             # Alerts list is still shared, but alerts themselves are frozen.
             return list(self._open_incidents.values())
-
-    def get_incident(self, incident_id: str) -> Optional[Incident]:
-        """Return an open incident by ID, or None if not found."""
-        with self._lock:
-            for inc in self._open_incidents.values():
-                if inc.incident_id == incident_id:
-                    return inc
-        return None
 
     def is_repeat_offender(self, source_ip: str) -> bool:
         """Whether this source IP has been seen before in this session.
@@ -284,6 +288,77 @@ class IncidentManager:
         """
         with self._lock:
             return source_ip in self._seen_source_ips
+
+    def get_alerts_for_ip(
+        self,
+        source_ip: str,
+        since_epoch: Optional[float] = None,
+    ) -> List[AlertRecord]:
+        """Return all alerts from a source IP across open + recently-closed incidents.
+
+        Used by the agentic ReAct tools (get_alert_history) to assess prior
+        activity from an attacker IP. Reads through the public API rather than
+        accessing private state directly.
+
+        Args:
+            source_ip:    the attacker IP to filter on
+            since_epoch:  if set, only include alerts with
+                          timestamp_epoch >= since_epoch (POSIX seconds).
+                          A value of 0.0 in an alert is treated as "unknown"
+                          and is excluded from filtered results.
+
+        Returns: list of AlertRecord (may be empty). Lock-protected snapshot;
+        the caller can iterate freely.
+        """
+        out: List[AlertRecord] = []
+        with self._lock:
+            buckets: List[Incident] = []
+            buckets.extend(self._open_incidents.values())
+            buckets.extend(self._recently_closed.values())
+
+            for incident in buckets:
+                if incident.source_ip != source_ip:
+                    continue
+                for alert in incident.alerts:
+                    if since_epoch is not None:
+                        if alert.timestamp_epoch <= 0 or alert.timestamp_epoch < since_epoch:
+                            continue
+                    out.append(alert)
+        return out
+
+    def get_incident_count_for_ip(self, source_ip: str) -> int:
+        """Count of open + recently-closed incidents involving this source IP.
+
+        Used by get_alert_history tool to surface incident-level recurrence
+        distinct from raw alert volume.
+        """
+        with self._lock:
+            count = 0
+            for incident in self._open_incidents.values():
+                if incident.source_ip == source_ip:
+                    count += 1
+            for incident in self._recently_closed.values():
+                if incident.source_ip == source_ip:
+                    count += 1
+            return count
+
+    def get_all_incidents(self) -> List[Incident]:
+        """Snapshot of all in-memory incidents: open + recently-closed.
+
+        Used by the agentic ReAct tools (get_attack_pattern_stats) to
+        aggregate across both currently-open incidents and incidents that
+        have closed within the current session but are still cached in
+        memory for final regeneration.
+
+        Returns a list; the caller can iterate freely. Alert lists inside
+        each Incident remain shared references, but Incidents themselves
+        are append-only via add_alert() so concurrent iteration is safe
+        for read-only purposes.
+        """
+        with self._lock:
+            out = list(self._open_incidents.values())
+            out.extend(self._recently_closed.values())
+            return out
 
     # ------------------------------------------------------------------
     # Internal: grouping

@@ -25,12 +25,13 @@ import threading
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+# tests/ sits one level below src/, so reach up twice for the import root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
 from incident_manager import IncidentManager
 from report_generator import ReportGenerator
-from storage import ReportStorage
+from report_db import ReportDatabase
 from model_provider import ModelProvider, ProviderType
 
 
@@ -59,7 +60,7 @@ class FakeProvider(ModelProvider):
             # Stage 1
             return json.dumps({
                 "classification": "true_positive",
-                "severity": "High",
+                "severity": "critical",
                 "summary": "SQLi attempt captured",
                 "recommendation": "block_source_ip",
                 "reasoning": "Clear UNION SELECT payload targeting users table.",
@@ -122,7 +123,10 @@ def test_pipeline_basic_flow():
 
     storage_dir = tempfile.mkdtemp(prefix="int-test-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
 
         manager = IncidentManager(
             grouping_mode="per_actor",
@@ -157,16 +161,16 @@ def test_pipeline_basic_flow():
         assert report.incident_summary.total_alerts == 3
         assert report.incident_summary.source_ip == "192.168.56.1"
         assert report.incident_summary.classification_counts["true_positive"] == 3
-        assert report.incident_summary.overall_severity == "High"
+        assert report.incident_summary.overall_severity == "critical"
 
-        # File should be on disk
-        files = list(Path(storage_dir).glob("inc_*.json"))
-        assert len(files) == 1, f"Expected 1 file, got {len(files)}"
+        # Storage should hold exactly the one incident we generated
+        stored = storage.list_reports()
+        assert len(stored) == 1, f"Expected 1 stored report, got {len(stored)}"
 
         manager.stop(close_open=True)
         time.sleep(0.5)  # let final regen flush
 
-        print("    PASS: pipeline flowed from alert → incident → generated report → server callback")
+        print("    PASS: pipeline flowed from alert -> incident -> generated report -> server callback")
 
     finally:
         import shutil
@@ -183,7 +187,10 @@ def test_pipeline_force_regenerate():
 
     storage_dir = tempfile.mkdtemp(prefix="int-test-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         manager = IncidentManager(
             grouping_mode="per_actor",
             time_window_minutes=5.0,
@@ -228,7 +235,10 @@ def test_pipeline_sweeper_closes_incident():
 
     storage_dir = tempfile.mkdtemp(prefix="int-test-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         manager = IncidentManager(
             grouping_mode="per_actor",
             time_window_minutes=0.03,   # ~2 seconds
@@ -275,7 +285,10 @@ def test_pipeline_parallel_incidents():
 
     storage_dir = tempfile.mkdtemp(prefix="int-test-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         manager = IncidentManager(
             grouping_mode="per_actor",
             time_window_minutes=0.5,
@@ -320,7 +333,10 @@ def test_repeat_offender_flag():
 
     storage_dir = tempfile.mkdtemp(prefix="int-test-")
     try:
-        storage = ReportStorage(storage_dir)
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
         manager = IncidentManager(
             grouping_mode="per_actor",
             time_window_minutes=0.02,   # ~1 second
@@ -365,6 +381,147 @@ def test_repeat_offender_flag():
 
 
 # ============================================================================
+# Test 6: ReActAgent integration through the full pipeline
+# ============================================================================
+
+class _ReActMockProvider(ModelProvider):
+    """Replays canned XML responses. Sufficient for the ReAct loop.
+
+    complete_json() also delegates to the same response pool so that the
+    single-shot fallback path (used by ReActAgent on parse failure) and
+    Stage 2 narrative generation both see valid output.
+    """
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self._idx = 0
+
+    def _next(self):
+        if self._idx >= len(self._responses):
+            raise RuntimeError("Mock out of responses")
+        r = self._responses[self._idx]
+        self._idx += 1
+        return r
+
+    def complete(self, prompt: str) -> str:
+        return self._next()
+
+    def complete_json(self, prompt: str, system_prompt=None) -> str:
+        return self._next()
+
+    @property
+    def provider_type(self):
+        return ProviderType.OLLAMA
+
+    @property
+    def model_name(self):
+        return "react-mock"
+
+
+def test_pipeline_react_agent_path():
+    print("\n=== Test 6: ReActAgent path produces classifications with reasoning trace ===")
+
+    from tool_registry import ToolRegistry, ToolDefinition
+    from react_agent import ReActAgent
+
+    received = []
+
+    def capture(report):
+        received.append(report)
+
+    final_xml = """<thought>SQLi detected, classifying directly.</thought>
+<final_answer>
+{"classification": "true_positive", "severity": "critical",
+ "summary": "SQLi credential extraction", "recommendation": "block_source_ip",
+ "reasoning": "URL contains UNION SELECT user, password — credential exfiltration intent."}
+</final_answer>"""
+
+    stage2_json = """{"overview": "SQLi from a single source.",
+"attack_vectors": ["URL parameter"],
+"overall_attack_stage": "Initial Access",
+"ai_suggestions": ["Block source IP"],
+"exposure_detected": true,
+"exposure_types": ["database contents"],
+"affected_systems": ["web application"],
+"exposure_summary": "Possible credential exposure.",
+"impact_assessment": "High if attack succeeded."}"""
+
+    # The pipeline regenerates twice: once on the debounce timer and once
+    # again on stop(close_open=True). Each regen calls agent.classify()
+    # (Stage 1) and Stage 2's narrative — so we need 4 mock responses, two
+    # pairs of [final_xml, stage2_json].
+    provider = _ReActMockProvider([final_xml, stage2_json, final_xml, stage2_json])
+
+    # Empty tool registry — ReActAgent should still work; model picks
+    # direct final_answer without tools.
+    registry = ToolRegistry()
+    agent = ReActAgent(provider=provider, tools=registry, max_iterations=2)
+
+    storage_dir = tempfile.mkdtemp(prefix="int-test-react-")
+    try:
+        storage = ReportDatabase(
+            db_path=str(Path(storage_dir) / "reports.db"),
+            retention_days=0,
+        )
+        manager = IncidentManager(
+            grouping_mode="per_actor",
+            time_window_minutes=5.0,
+            debounce_seconds=0.3,
+        )
+        generator = ReportGenerator(
+            provider=provider,
+            storage=storage,
+            is_repeat_offender=manager.is_repeat_offender,
+            on_report_ready=capture,
+            agent_mode="react",
+            react_agent=agent,
+        )
+        manager.set_regenerate_callback(generator.generate)
+        manager.start()
+
+        manager.process_alert(_make_alert(src_ip="10.0.0.42"))
+        time.sleep(1.5)  # debounce + LLM mock
+
+        manager.stop(close_open=True)
+        time.sleep(0.5)
+
+        assert len(received) >= 1, "Expected at least one report"
+        report = received[-1]
+
+        # Classification result populated
+        assert len(report.alert_analyses) == 1
+        analysis = report.alert_analyses[0]
+        assert analysis.classification == "true_positive", (
+            f"Expected true_positive, got '{analysis.classification}'"
+        )
+        assert analysis.severity == "critical", (
+            f"Expected critical, got '{analysis.severity}'"
+        )
+        assert analysis.recommendation == "block_source_ip"
+
+        # ReAct agent metadata flowed through to AlertAnalysis
+        assert analysis.agent_mode == "react", (
+            f"Expected agent_mode=react, got '{analysis.agent_mode}'"
+        )
+        assert analysis.reasoning_trace is not None, (
+            "Expected reasoning_trace populated on AlertAnalysis"
+        )
+        assert len(analysis.reasoning_trace) >= 1, (
+            f"Expected non-empty reasoning_trace, got {analysis.reasoning_trace}"
+        )
+        step = analysis.reasoning_trace[0]
+        assert step.iteration == 1, f"first step iteration=1, got {step.iteration}"
+        assert "SQLi" in step.thought, (
+            f"thought should contain 'SQLi', got '{step.thought}'"
+        )
+
+        print("    PASS: ReActAgent classification + reasoning_trace flowed through pipeline")
+
+    finally:
+        import shutil
+        shutil.rmtree(storage_dir, ignore_errors=True)
+
+
+# ============================================================================
 # Runner
 # ============================================================================
 
@@ -375,6 +532,7 @@ def main():
         test_pipeline_sweeper_closes_incident,
         test_pipeline_parallel_incidents,
         test_repeat_offender_flag,
+        test_pipeline_react_agent_path,
     ]
 
     failed = []

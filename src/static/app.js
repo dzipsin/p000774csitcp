@@ -22,7 +22,7 @@ const tabCountAlerts    = document.getElementById('tab-count-alerts');
 const tabCountIncidents = document.getElementById('tab-count-incidents');
 
 // Alert stats
-const alertStats   = { total: 0, critical: 0, high: 0, medium: 0, low: 0 };
+const alertStats   = { total: 0, critical: 0, high: 0, low: 0 };
 const alertStatEls = Object.fromEntries(
   Object.keys(alertStats).map(k => [k, document.getElementById('stat-' + k)])
 );
@@ -185,11 +185,6 @@ document.getElementById('clear-btn').addEventListener('click', () => {
   fetch('/api/alerts/clear', { method: 'POST' });
 });
 
-// Legacy batch "Analyse" button — opens raw JSON (kept for backward compat)
-document.getElementById('analyse-btn').addEventListener('click', () => {
-  window.open('/api/analyse', '_blank');
-});
-
 // ----------------------------------------------------------------------------
 // Incidents handling
 // ----------------------------------------------------------------------------
@@ -301,7 +296,7 @@ function buildIncidentCard(report) {
 
   const card = document.createElement('div');
   const status = sum.incident_status || 'open';
-  const severity = sum.overall_severity || 'Low';
+  const severity = sum.overall_severity || 'low';
   const genStatus = report.generation_status || 'complete';
 
   card.className = `incident-card status-${status} severity-${severity}`;
@@ -400,7 +395,10 @@ function buildIncidentDetail(report) {
   metaHTML += `<dt>Attack stage</dt><dd>${esc(desc.overall_attack_stage || '—')}</dd>`;
   metaHTML += `<dt>Vectors</dt><dd>${esc((desc.attack_vectors || []).join(', ') || '—')}</dd>`;
   metaHTML += `<dt>True positives</dt><dd>${esc(cc.true_positive ?? 0)}</dd>`;
-  metaHTML += `<dt>False positives</dt><dd>${esc(cc.false_positive ?? 0)}</dd>`;
+  // Serializer key is `likely_false_positive` (matches classification enum);
+  // tolerate the legacy `false_positive` shape too in case any older cached
+  // report is still in memory.
+  metaHTML += `<dt>False positives</dt><dd>${esc(cc.likely_false_positive ?? cc.false_positive ?? 0)}</dd>`;
   if (cc.error) metaHTML += `<dt>Errors</dt><dd>${esc(cc.error)}</dd>`;
   metaHTML += `<dt>First seen</dt><dd>${esc(sum.first_seen || '—')}</dd>`;
   metaHTML += `<dt>Last seen</dt><dd>${esc(sum.last_seen || '—')}</dd>`;
@@ -445,6 +443,12 @@ function buildIncidentDetail(report) {
     detail.appendChild(_section(`Alert Analyses (${analyses.length})`, html));
   }
 
+  // Agent Reasoning timeline (ReAct mode only)
+  const reasoningHTML = _renderReasoningTrace(analyses);
+  if (reasoningHTML) {
+    detail.appendChild(_section('Agent Reasoning', reasoningHTML));
+  }
+
   // Indicators of compromise
   const iocs = expo.indicators_of_compromise || [];
   if (iocs.length) {
@@ -482,6 +486,122 @@ function _section(title, innerHTML) {
   body.innerHTML = innerHTML;
   wrap.appendChild(body);
   return wrap;
+}
+
+// ----------------------------------------------------------------------------
+// Agent Reasoning timeline (ReAct mode only)
+// ----------------------------------------------------------------------------
+
+function _renderReasoningTrace(analyses) {
+  // Filter to alerts that have a populated reasoning trace.
+  const withTrace = analyses.filter(a =>
+    Array.isArray(a.reasoning_trace) && a.reasoning_trace.length > 0
+  );
+  if (!withTrace.length) return null;
+
+  // Render one block per alert (max 5; mirror the alert analyses cap)
+  const blocks = withTrace.slice(0, 5).map(a => {
+    const trace = a.reasoning_trace || [];
+    const totalMs = trace.reduce((s, st) => s + (st.duration_ms || 0), 0);
+    const totalSec = (totalMs / 1000).toFixed(1);
+    const alertIdShort = String(a.alert_id || '').slice(0, 12) || '—';
+    const mode = a.agent_mode || 'single_shot';
+    const toolCalls = a.tool_calls ?? 0;
+
+    const stepsHTML = trace.map(step => _renderReasoningStep(step)).join('');
+
+    return `
+      <div class="reasoning-alert-block">
+        <div class="reasoning-alert-header">
+          <span class="reasoning-alert-id">${esc(alertIdShort)}</span>
+          <span class="reasoning-mode-badge mode-${esc(mode)}">${esc(mode)}</span>
+          <span class="reasoning-meta">${trace.length} step${trace.length === 1 ? '' : 's'}</span>
+          <span class="reasoning-meta">${toolCalls} tool${toolCalls === 1 ? '' : 's'}</span>
+          <span class="reasoning-meta">${esc(totalSec)}s total</span>
+        </div>
+        <div class="reasoning-steps">${stepsHTML}</div>
+      </div>
+    `;
+  }).join('');
+
+  let html = `<div class="reasoning-trace">${blocks}</div>`;
+  if (withTrace.length > 5) {
+    html += `<div style="margin-top:6px;color:var(--muted);font-size:0.7rem">… ${withTrace.length - 5} more</div>`;
+  }
+  return html;
+}
+
+function _formatObservation(rawObs) {
+  // Pretty-print observation when it parses as JSON; fall back to raw text
+  // when it doesn't. Indent with 2 spaces. Tool results are JSON-serialised
+  // by ToolResult.to_observation_json() so most observations will parse.
+  if (rawObs == null) return '';
+  const text = String(rawObs);
+  if (!text.trim()) return text;
+  // Only attempt parse for things that look like objects/arrays — avoid
+  // calling JSON.parse on every short observation.
+  const first = text.trim()[0];
+  if (first !== '{' && first !== '[') return text;
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+function _renderReasoningStep(step) {
+  const isFinal = !step.action;
+  const isSystem = (step.source === 'system');
+  const iteration = step.iteration ?? '?';
+  // System enrichment steps display "A" (auto) badge instead of iteration number
+  const badgeLabel = isSystem ? 'A' : iteration;
+  // Always render a duration label. 0 / null / undefined / sub-1ms collapse to "<1ms"
+  // rather than disappearing silently (small fast tool calls were invisible before).
+  let duration = '';
+  if (step.duration_ms != null && Number.isFinite(step.duration_ms)) {
+    duration = step.duration_ms < 1 ? '<1ms' : `${step.duration_ms}ms`;
+  }
+  const errorBlock = step.parse_error
+    ? `<div class="reasoning-parse-error">⚠ parse error: ${esc(step.parse_error)}</div>`
+    : '';
+
+  let bodyHTML = '';
+  if (step.thought) {
+    bodyHTML += `<div class="reasoning-thought">${esc(step.thought)}</div>`;
+  }
+  if (step.action) {
+    const argsStr = step.action_input != null
+      ? JSON.stringify(step.action_input)
+      : '{}';
+    bodyHTML += `
+      <div class="reasoning-action">
+        <span class="reasoning-action-name">${esc(step.action)}</span>
+        <span class="reasoning-action-args">${esc(argsStr)}</span>
+      </div>`;
+  }
+  if (step.observation != null) {
+    bodyHTML += `<div class="reasoning-observation">${esc(_formatObservation(step.observation))}</div>`;
+  }
+  if (isFinal && !errorBlock && !isSystem) {
+    bodyHTML += `<div class="reasoning-final-marker">final answer ✓</div>`;
+  }
+
+  const classNames = [
+    'reasoning-step',
+    isFinal ? 'is-final' : '',
+    isSystem ? 'is-system' : 'is-model',
+  ].filter(Boolean).join(' ');
+
+  return `
+    <div class="${classNames}">
+      <div class="reasoning-step-badge" title="${isSystem ? 'Auto-enrichment' : 'LLM iteration ' + iteration}">${esc(badgeLabel)}</div>
+      <div class="reasoning-step-body">
+        ${bodyHTML}
+        ${errorBlock}
+        ${duration ? `<div class="reasoning-step-duration">${esc(duration)}</div>` : ''}
+      </div>
+    </div>
+  `;
 }
 
 // ----------------------------------------------------------------------------

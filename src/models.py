@@ -21,6 +21,39 @@ from log_monitor import AlertRecord
 
 
 # ---------------------------------------------------------------------------
+# ReasoningStep — one iteration of the ReAct loop (agentic mode)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ReasoningStep:
+    """One iteration of the ReAct loop captured for transparency.
+
+    Used by the agentic ReAct path (ReActAgent). Single-shot path leaves
+    AlertClassification.reasoning_trace as None.
+
+    Captured for two purposes:
+      1. Dashboard display — shows the marker / user how the agent reasoned.
+      2. Evaluation — lets us audit when the agent uses tools and why.
+
+    `source` distinguishes who issued the step:
+      - "model"  → emitted by the LLM during the ReAct loop
+      - "system" → automatic pre-enrichment done deterministically by the
+                   agent before the LLM call (Option F hybrid policy).
+
+    `iteration = 0` is the convention for system-driven enrichment steps;
+    LLM-driven iterations start at 1.
+    """
+    iteration: int                          # 0 = system enrichment, 1+ = LLM round
+    thought: str                            # model's stated reasoning
+    action: Optional[str]                   # tool name, or None on final answer
+    action_input: Optional[Dict]            # tool arguments (parsed JSON)
+    observation: Optional[str]              # tool output JSON; None on final
+    duration_ms: int                        # wall-clock for LLM + tool exec
+    parse_error: Optional[str] = None       # set if this round's output failed to parse
+    source: str = "model"                   # "model" | "system"
+
+
+# ---------------------------------------------------------------------------
 # Per-alert AI classification (Stage 1 output)
 # ---------------------------------------------------------------------------
 
@@ -28,13 +61,14 @@ from log_monitor import AlertRecord
 class AlertClassification:
     """AI-generated verdict for a single Suricata alert.
 
-    Produced by ReportGenerator Stage 1. One per alert in the incident.
+    Produced by ReportGenerator Stage 1 (single-shot path) OR by ReActAgent
+    (react path). One per alert in the incident.
     """
 
     alert_id: str                    # derived from flow_id or UUID
     timestamp: str                   # original alert timestamp_raw
     classification: str              # "true_positive" | "likely_false_positive"
-    severity: str                    # "Low" | "Medium" | "High"
+    severity: str                    # "critical" | "high" | "low" (matches Suricata P1/P2/P3 tiers)
     summary: str                     # one-line description
     recommendation: str              # "block_source_ip" | "escalate_tier2" | "continue_monitoring"
     reasoning: str                   # LLM's explanation
@@ -53,8 +87,14 @@ class AlertClassification:
     confidence_score: float = 0.5    # 0.0 - 1.0, rule-based
 
     # Metadata
-    status: str = "complete"         # "complete" | "error"
+    status: str = "complete"         # "complete" | "error" | "partial"
     error: Optional[str] = None
+
+    # ReAct agent metadata (None / defaults when produced by single-shot path)
+    reasoning_trace: Optional[List[ReasoningStep]] = None
+    agent_mode: str = "single_shot"  # "single_shot" | "react"
+    parse_failure_count: int = 0     # ReAct-only: how many model outputs failed to parse
+    tool_calls: int = 0              # ReAct-only: number of tools invoked
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +214,7 @@ class IncidentSummary:
     total_alerts: int
     classification_counts: Dict[str, int]   # {"true_positive": N, "likely_false_positive": N, "error": N}
     detected_attacks: List[str]             # ["SQLi", "XSS", ...]
-    overall_severity: str                   # "Low" | "Medium" | "High"
+    overall_severity: str                   # "critical" | "high" | "low" (matches Suricata P1/P2/P3 tiers)
     overall_cvss_estimate: float            # 0.0 - 10.0, rule-based
     repeat_offender: bool                   # IP seen in prior incidents this session
 
@@ -193,9 +233,17 @@ class AlertAnalysis:
     # can read per-alert TP/FP labels without having to re-derive them.
     # Default values kept for backward compatibility with existing test fixtures.
     classification: str = ""                # "true_positive" | "likely_false_positive" | "" (error)
-    severity: str = ""                      # "Low" | "Medium" | "High" | ""
+    severity: str = ""                      # "critical" | "high" | "low" | "" (matches Suricata P1/P2/P3 tiers)
     recommendation: str = ""                # block_source_ip | escalate_tier2 | continue_monitoring
     classification_status: str = "complete" # complete | error
+
+    # ReAct agent metadata (None / defaults when produced by single-shot path).
+    # The reasoning_trace is what the dashboard renders in the timeline view —
+    # without it, the agentic story is invisible to the user / marker.
+    reasoning_trace: Optional[List[ReasoningStep]] = None
+    agent_mode: str = "single_shot"         # "single_shot" | "react"
+    parse_failure_count: int = 0            # ReAct-only
+    tool_calls: int = 0                     # ReAct-only
 
 
 @dataclass
@@ -258,15 +306,37 @@ class IncidentReport:
 # Attack type classification (rule-based, shared utility)
 # ---------------------------------------------------------------------------
 
-def extract_attack_type(signature: str) -> str:
+# SID ranges of our custom rule files (see lab/suricata/).
+# These map deterministically to attack types regardless of msg wording,
+# which avoids substring-match misses on signatures like
+# "P2 - SQL Comment Sequence in URI" (no "SQLI" / "SQL INJECTION" token).
+_CUSTOM_XSS_SID_RANGE = range(1000001, 1000059)    # xss_alerts.rules: 1000001-1000058
+_CUSTOM_SQLI_SID_RANGE = range(1000101, 1000114)   # sqli_alerts.rules: 1000101-1000113
+
+
+def extract_attack_type(signature: str, signature_id: Optional[int] = None) -> str:
     """Classify a Suricata alert signature into a broad attack type.
 
-    This is deterministic and fast, used for grouping decisions and report
+    Deterministic and fast; used for grouping decisions and report
     population. Runs before any LLM call.
 
+    Resolution order:
+      1. signature_id in a custom SID range (SQLi / XSS) -> definitive
+      2. case-insensitive substring match on the signature msg
+      3. "Other"
+
+    Pass signature_id when available -- it is robust against msg-wording
+    changes in the rule files. Falls back to substring matching for ET
+    Open or unknown SIDs.
+
     Handles empty/None signatures gracefully (returns "Other").
-    Case-insensitive matching.
     """
+    if signature_id is not None:
+        if signature_id in _CUSTOM_SQLI_SID_RANGE:
+            return "SQLi"
+        if signature_id in _CUSTOM_XSS_SID_RANGE:
+            return "XSS"
+
     if not signature:
         return "Other"
 

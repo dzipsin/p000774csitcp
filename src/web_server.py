@@ -6,29 +6,44 @@ Responsibilities:
   - Receive AlertRecord objects via push_alert() from LogMonitor
   - Receive IncidentReport objects via push_incident_report() from ReportGenerator
   - Push alerts and incidents to browsers in real-time over WebSocket
-  - Expose REST endpoints to query buffered alerts, incidents, and trigger analysis
+  - Expose REST endpoints to query buffered alerts and incidents
 
 Depends on:
   log_monitor.AlertRecord    - consumed via push_alert()
-  ai_module.AIAnalyzer       - called on demand via /api/analyse (legacy batch mode)
-  ai_module.AlertReport      - legacy return type of /api/analyse
-  models.IncidentReport      - new per-incident report type
+  models.IncidentReport      - per-incident report type
   incident_manager           - (optional) wired to support /api/incidents/regenerate
 """
 
 import dataclasses
 import logging
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO
 
 from log_monitor import AlertRecord
-from ai_module import AIAnalyzer, AlertReport
 from models import IncidentReport
 
 log = logging.getLogger(__name__)
+
+
+def _parse_hours(raw: Optional[str]) -> Optional[float]:
+    """Convert `?hours=N` query string into a since_epoch.
+
+    Returns None if missing or invalid (caller treats None as "all time").
+    Negative or zero values also return None.
+    """
+    if raw is None or raw == "":
+        return None
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if hours <= 0:
+        return None
+    return time.time() - (hours * 3600.0)
 
 
 class Server:
@@ -37,7 +52,6 @@ class Server:
     Usage::
 
         server = Server(host="0.0.0.0", port=5000, secret_key="...")
-        server.set_analyser(analyser)
         server.set_incident_force_regenerate(incident_manager.force_regenerate_all)
         server.set_storage(storage)
         monitor.subscribe(server.push_alert)
@@ -71,9 +85,13 @@ class Server:
         self._incidents_lock = threading.Lock()
 
         # Optional integrations
-        self._analyser: Optional[AIAnalyzer] = None
         self._incident_force_regenerate: Optional[Callable[[], int]] = None
         self._incident_clear_all: Optional[Callable[[], int]] = None
+        # Phase 10: query-capable storage backend (ReportDatabase). Endpoints
+        # that require SQLite-only methods (list_by_*, aggregate_stats) check
+        # `hasattr` before calling, so a JSON-backed deployment still works
+        # (those endpoints just return 503).
+        self._storage: Optional[Any] = None
 
         # Flask app + Socket.IO
         self._app = Flask(__name__)
@@ -87,10 +105,6 @@ class Server:
     # Integration points
     # ------------------------------------------------------------------
 
-    def set_analyser(self, analyser: AIAnalyzer) -> None:
-        """Attach the legacy AIAnalyzer (for /api/analyse batch mode)."""
-        self._analyser = analyser
-
     def set_incident_force_regenerate(self, fn: Callable[[], int]) -> None:
         """Attach IncidentManager.force_regenerate_all."""
         self._incident_force_regenerate = fn
@@ -98,6 +112,13 @@ class Server:
     def set_incident_clear_all(self, fn: Callable[[], int]) -> None:
         """Attach a callable that clears incident storage (on-disk reports)."""
         self._incident_clear_all = fn
+
+    def set_storage(self, storage: Any) -> None:
+        """Attach the storage backend. When it exposes the Phase 10 query
+        methods (list_by_source_ip / list_by_attack_type / list_by_severity
+        / aggregate_stats), the corresponding HTTP endpoints become live.
+        JSON-backed storage works but those endpoints return 503."""
+        self._storage = storage
 
     # ------------------------------------------------------------------
     # Inbound: alerts
@@ -123,12 +144,23 @@ class Server:
         """Cache and broadcast an incident report update.
 
         Called from ReportGenerator's worker thread after a report is generated.
+
+        Emits the template-v1-compliant JSON shape so the persisted reports
+        (via ReportDatabase), the cache, the /api/incidents endpoint, and the
+        WebSocket push all use one consistent format. Internal extras
+        (incident_id, classification per alert, reasoning trace) are
+        preserved alongside template-required fields.
         """
         try:
-            report_dict = dataclasses.asdict(report)
+            from report_serializer import to_template_v1
+            report_dict = to_template_v1(report)
         except Exception as e:
             log.exception("Failed to serialise IncidentReport: %s", e)
-            return
+            # Fallback to raw asdict so the dashboard at least gets something.
+            try:
+                report_dict = dataclasses.asdict(report)
+            except Exception:
+                return
 
         incident_id = report.incident_summary.incident_id
 
@@ -203,29 +235,6 @@ class Server:
                 log.exception("Failed to emit clear event")
             return jsonify({"cleared": count})
 
-        @app.route("/api/analyse", methods=["GET", "POST"])
-        def api_analyse():
-            """Legacy batch-mode analysis endpoint.
-
-            Kept for backward compatibility with the old "Analyse" button.
-            New flow uses /api/incidents/* endpoints.
-            """
-            if self._analyser is None:
-                return jsonify({"error": "AI analyser not configured."}), 503
-
-            body = request.get_json(silent=True) or {}
-            last_n = int(body.get("last_n", self.max_buffer))
-
-            with self._buffer_lock:
-                batch = list(self._buffer[-last_n:])
-
-            try:
-                report: AlertReport = self._analyser.analyse(batch)
-                return jsonify(dataclasses.asdict(report))
-            except Exception as e:
-                log.exception("Legacy /api/analyse failed")
-                return jsonify({"error": str(e)}), 500
-
         @app.route("/api/status")
         def api_status():
             """Simple health-check endpoint."""
@@ -237,7 +246,6 @@ class Server:
                 "status":               "ok",
                 "buffered_alerts":      buffered,
                 "cached_incidents":     inc_count,
-                "ai_ready":             self._analyser is not None,
                 "incident_pipeline":    self._incident_force_regenerate is not None,
             })
 
@@ -310,6 +318,130 @@ class Server:
                 "cleared_memory": mem_count,
                 "cleared_disk": disk_count,
             })
+
+        # ------------------------------------------------------------------
+        # Routes: incident history queries (SQLite-backed)
+        #
+        # These endpoints depend on the ReportDatabase query methods. The
+        # _require_query_backend guard below still uses hasattr() so an
+        # alternate backend without one of the methods would degrade to 503
+        # instead of crashing — defensive but cheap.
+        # ------------------------------------------------------------------
+
+        def _require_query_backend(method_name: str):
+            """Return None if the backend supports method_name, otherwise a
+            (response, status) tuple suitable for `return` in the handler."""
+            if self._storage is None:
+                return jsonify({
+                    "error": "Storage backend not attached.",
+                }), 503
+            if not hasattr(self._storage, method_name):
+                return jsonify({
+                    "error": (
+                        f"Backend does not support history queries "
+                        f"(method `{method_name}` unavailable). Set "
+                        f"[storage].backend = \"sqlite\" in app.config."
+                    ),
+                }), 503
+            return None
+
+        @app.route("/api/incidents/by-ip/<path:source_ip>")
+        def api_incidents_by_ip(source_ip: str):
+            """All incidents from a given source IP across all sessions.
+
+            Query params:
+                hours = N  → only incidents whose generated_at is within
+                             the last N hours.
+            """
+            err = _require_query_backend("list_by_source_ip")
+            if err is not None:
+                return err
+            since_epoch = _parse_hours(request.args.get("hours"))
+            try:
+                results = self._storage.list_by_source_ip(
+                    source_ip=source_ip, since_epoch=since_epoch,
+                )
+                return jsonify({
+                    "source_ip": source_ip,
+                    "since_epoch": since_epoch,
+                    "incidents": results,
+                    "total": len(results),
+                })
+            except Exception as e:
+                log.exception("by-ip query failed: %s", e)
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/incidents/by-attack/<path:attack_type>")
+        def api_incidents_by_attack(attack_type: str):
+            """All incidents whose detected_attacks list contains attack_type.
+
+            Query params:
+                hours = N
+            """
+            err = _require_query_backend("list_by_attack_type")
+            if err is not None:
+                return err
+            since_epoch = _parse_hours(request.args.get("hours"))
+            try:
+                results = self._storage.list_by_attack_type(
+                    attack_type=attack_type, since_epoch=since_epoch,
+                )
+                return jsonify({
+                    "attack_type": attack_type,
+                    "since_epoch": since_epoch,
+                    "incidents": results,
+                    "total": len(results),
+                })
+            except Exception as e:
+                log.exception("by-attack query failed: %s", e)
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/incidents/by-severity/<severity>")
+        def api_incidents_by_severity(severity: str):
+            """All incidents with the given overall severity."""
+            err = _require_query_backend("list_by_severity")
+            if err is not None:
+                return err
+            try:
+                results = self._storage.list_by_severity(severity=severity)
+                return jsonify({
+                    "severity": severity,
+                    "incidents": results,
+                    "total": len(results),
+                })
+            except Exception as e:
+                log.exception("by-severity query failed: %s", e)
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/incidents/stats")
+        def api_incidents_stats():
+            """Aggregate counts of incidents by status / severity / attack
+            type plus repeat-offender count. Query params:
+                hours = N  → bound the window."""
+            err = _require_query_backend("aggregate_stats")
+            if err is not None:
+                return err
+            since_epoch = _parse_hours(request.args.get("hours"))
+            try:
+                stats = self._storage.aggregate_stats(since_epoch=since_epoch)
+                return jsonify(stats)
+            except Exception as e:
+                log.exception("aggregate_stats failed: %s", e)
+                return jsonify({"error": str(e)}), 500
+
+        @app.route("/api/incidents/cleanup", methods=["POST"])
+        def api_incidents_cleanup():
+            """Manually trigger retention cleanup. Drops incidents older
+            than the configured retention. Returns the count dropped."""
+            err = _require_query_backend("cleanup_expired")
+            if err is not None:
+                return err
+            try:
+                count = self._storage.cleanup_expired()
+                return jsonify({"dropped": count})
+            except Exception as e:
+                log.exception("cleanup_expired failed: %s", e)
+                return jsonify({"error": str(e)}), 500
 
     # ------------------------------------------------------------------
     # Socket.IO events

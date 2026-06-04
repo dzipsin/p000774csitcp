@@ -97,6 +97,17 @@ def parse_args():
                    help="Label for this run (included in output filenames)")
     p.add_argument("--final-wait", type=float, default=45.0,
                    help="Seconds to wait after last attack before fetching results")
+    p.add_argument(
+        "--config-dim",
+        default=None,
+        help=(
+            "JSON object describing the configuration dimensions ACTIVE on the "
+            "running app for this run. Persisted into the raw output and "
+            "consumed by the combined-report generator (Phase 6). Example: "
+            '\'{"model":"qwen2.5:3b","agent_mode":"react",'
+            '"auto_enrichment":true,"custom_xss_rules":false}\''
+        ),
+    )
     return p.parse_args()
 
 
@@ -240,6 +251,23 @@ def _check_dashboard(dashboard: DashboardClient) -> bool:
 
 def _write_raw(path, scenario_results, metrics, matrix, args) -> None:
     """Serialise all raw results for post-hoc analysis."""
+    # Parse the --config-dim JSON blob if provided. Captured verbatim into
+    # the raw output so the combined-report generator (Phase 6) can build
+    # an ablation table without re-asking the operator which config was
+    # active for which run.
+    config_dimensions = None
+    if getattr(args, "config_dim", None):
+        try:
+            config_dimensions = json.loads(args.config_dim)
+            if not isinstance(config_dimensions, dict):
+                log.warning(
+                    "--config-dim is not a JSON object; storing as raw string",
+                )
+                config_dimensions = {"_raw": str(args.config_dim)}
+        except json.JSONDecodeError as e:
+            log.warning("--config-dim is not valid JSON (%s); storing as raw string", e)
+            config_dimensions = {"_raw": str(args.config_dim)}
+
     payload = {
         "label": args.label,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -250,6 +278,7 @@ def _write_raw(path, scenario_results, metrics, matrix, args) -> None:
             "settle_time": args.settle_time,
             "final_wait": args.final_wait,
         },
+        "config_dimensions": config_dimensions,
         "metrics": metrics.as_dict(),
         "confusion_matrix": matrix,
         "scenario_results": [_sr_to_dict(sr) for sr in scenario_results],

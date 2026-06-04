@@ -35,8 +35,8 @@ class Scenario:
         form_data: POST body (if method=POST)
 
         expected_classification: "true_positive" or "likely_false_positive"
-        expected_severity: "Low" | "Medium" | "High" (for TPs; meaningful only
-                           when the detection engine should recognise the attack)
+        expected_severity: "critical" | "high" | "low" (matches Suricata
+                           P1/P2/P3 rule tiers; meaningful for TPs only)
         expected_attack_type: one of SQLi/XSS/PathTraversal/CommandInjection/
                               Reconnaissance/Other
         expected_to_trigger_suricata: whether we expect Suricata to actually fire
@@ -52,7 +52,7 @@ class Scenario:
     form_data: Optional[Dict[str, str]] = None
 
     expected_classification: str = "true_positive"
-    expected_severity: str = "Medium"
+    expected_severity: str = "low"
     expected_attack_type: str = "Other"
     expected_to_trigger_suricata: bool = True
 
@@ -86,7 +86,7 @@ SCENARIOS: List[Scenario] = [
             "Submit": "Submit",
         },
         expected_classification="true_positive",
-        expected_severity="High",
+        expected_severity="critical",
         expected_attack_type="SQLi",
     ),
     Scenario(
@@ -100,7 +100,7 @@ SCENARIOS: List[Scenario] = [
             "Submit": "Submit",
         },
         expected_classification="true_positive",
-        expected_severity="High",
+        expected_severity="critical",
         expected_attack_type="SQLi",
     ),
     Scenario(
@@ -111,7 +111,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/sqli/",
         query_params={"id": "1' AND 1=1#", "Submit": "Submit"},
         expected_classification="true_positive",
-        expected_severity="Medium",
+        expected_severity="high",
         expected_attack_type="SQLi",
     ),
     Scenario(
@@ -122,7 +122,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/sqli/",
         query_params={"id": "1' OR 'a'='a", "Submit": "Submit"},
         expected_classification="true_positive",
-        expected_severity="Medium",
+        expected_severity="high",
         expected_attack_type="SQLi",
     ),
     Scenario(
@@ -136,7 +136,7 @@ SCENARIOS: List[Scenario] = [
             "Submit": "Submit",
         },
         expected_classification="true_positive",
-        expected_severity="High",
+        expected_severity="critical",
         expected_attack_type="SQLi",
     ),
     Scenario(
@@ -147,7 +147,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/sqli/",
         query_params={"id": "1' AND SLEEP(2)--", "Submit": "Submit"},
         expected_classification="true_positive",
-        expected_severity="Medium",
+        expected_severity="high",
         expected_attack_type="SQLi",
     ),
     Scenario(
@@ -161,7 +161,7 @@ SCENARIOS: List[Scenario] = [
             "Submit": "Submit",
         },
         expected_classification="true_positive",
-        expected_severity="High",
+        expected_severity="critical",
         expected_attack_type="SQLi",
     ),
     Scenario(
@@ -172,7 +172,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/sqli/",
         query_params={"id": "'", "Submit": "Submit"},
         expected_classification="true_positive",
-        expected_severity="Low",
+        expected_severity="low",
         expected_attack_type="SQLi",
         # Minimal payload — Suricata's ET rules may or may not fire on a lone quote
         expected_to_trigger_suricata=False,
@@ -187,7 +187,8 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/xss_r/",
         query_params={"name": "<script>alert('xss')</script>"},
         expected_classification="true_positive",
-        expected_severity="High",
+        # Matches custom XSS rule 2000040 (raw script tag in URI) — P2 high
+        expected_severity="high",
         expected_attack_type="XSS",
     ),
     Scenario(
@@ -198,7 +199,9 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/xss_r/",
         query_params={"name": "<img src=x onerror=alert(1)>"},
         expected_classification="true_positive",
-        expected_severity="High",
+        # Matches P3 raw-tag + event-handler rules, but payload is a clear XSS
+        # execution attempt; bucketing as "high" reflects analyst intent.
+        expected_severity="high",
         expected_attack_type="XSS",
     ),
     Scenario(
@@ -209,7 +212,8 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/xss_r/",
         query_params={"name": "<svg/onload=alert(1)>"},
         expected_classification="true_positive",
-        expected_severity="High",
+        # Same as xss_img_010: P3 rule match, "high" intent.
+        expected_severity="high",
         expected_attack_type="XSS",
     ),
     Scenario(
@@ -220,7 +224,8 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/xss_r/",
         query_params={"name": '"><script>alert(1)</script>'},
         expected_classification="true_positive",
-        expected_severity="High",
+        # Raw script tag — matches P2 rule 2000040.
+        expected_severity="high",
         expected_attack_type="XSS",
     ),
     Scenario(
@@ -231,7 +236,8 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/xss_r/",
         query_params={"name": "%3Cscript%3Ealert(1)%3C%2Fscript%3E"},
         expected_classification="true_positive",
-        expected_severity="High",
+        # URL-encoded script tag — matches P2 rule 2000040 via pcre.
+        expected_severity="high",
         expected_attack_type="XSS",
         # Double-encoding can slip past some rule variants
         expected_to_trigger_suricata=True,
@@ -244,7 +250,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/xss_r/",
         query_params={"name": "javascript:alert(1)"},
         expected_classification="true_positive",
-        expected_severity="Medium",
+        expected_severity="high",
         expected_attack_type="XSS",
         expected_to_trigger_suricata=False,  # often not detected by default rules
     ),
@@ -258,7 +264,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/exec/",
         form_data={"ip": "127.0.0.1; cat /etc/passwd", "Submit": "Submit"},
         expected_classification="true_positive",
-        expected_severity="High",
+        expected_severity="critical",
         expected_attack_type="CommandInjection",
     ),
     Scenario(
@@ -269,7 +275,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/exec/",
         form_data={"ip": "127.0.0.1 | whoami", "Submit": "Submit"},
         expected_classification="true_positive",
-        expected_severity="High",
+        expected_severity="critical",
         expected_attack_type="CommandInjection",
     ),
     Scenario(
@@ -280,7 +286,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/exec/",
         form_data={"ip": "127.0.0.1 `id`", "Submit": "Submit"},
         expected_classification="true_positive",
-        expected_severity="High",
+        expected_severity="critical",
         expected_attack_type="CommandInjection",
     ),
 
@@ -293,7 +299,9 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/fi/",
         query_params={"page": "../../../../etc/passwd"},
         expected_classification="true_positive",
-        expected_severity="High",
+        # No custom-rule coverage for path traversal; analyst tier = "high"
+        # (disclosure intent, not active exfil).
+        expected_severity="high",
         expected_attack_type="PathTraversal",
     ),
     Scenario(
@@ -304,7 +312,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/fi/",
         query_params={"page": "http://example.com/shell.txt"},
         expected_classification="true_positive",
-        expected_severity="High",
+        expected_severity="critical",
         expected_attack_type="FileInclusion",
     ),
     Scenario(
@@ -315,7 +323,9 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/fi/",
         query_params={"page": "php://filter/convert.base64-encode/resource=index"},
         expected_classification="true_positive",
-        expected_severity="High",
+        # Source-disclosure technique; not in custom rule coverage. "high"
+        # matches analyst tier for non-exfil disclosure attempts.
+        expected_severity="high",
         expected_attack_type="FileInclusion",
         expected_to_trigger_suricata=False,  # rule coverage for this is inconsistent
     ),
@@ -329,7 +339,7 @@ SCENARIOS: List[Scenario] = [
         path="/robots.txt",
         query_params={},
         expected_classification="true_positive",
-        expected_severity="Low",
+        expected_severity="low",
         expected_attack_type="Reconnaissance",
         expected_to_trigger_suricata=False,  # benign by itself; often ignored
     ),
@@ -341,7 +351,7 @@ SCENARIOS: List[Scenario] = [
         path="/admin/",
         query_params={},
         expected_classification="true_positive",
-        expected_severity="Low",
+        expected_severity="low",
         expected_attack_type="Reconnaissance",
         expected_to_trigger_suricata=False,
     ),
@@ -355,7 +365,7 @@ SCENARIOS: List[Scenario] = [
         path="/",
         query_params={},
         expected_classification="likely_false_positive",
-        expected_severity="Low",
+        expected_severity="low",
         expected_attack_type="Other",
         expected_to_trigger_suricata=False,
     ),
@@ -367,7 +377,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/sqli/",
         query_params={"id": "1", "Submit": "Submit"},
         expected_classification="likely_false_positive",
-        expected_severity="Low",
+        expected_severity="low",
         expected_attack_type="Other",
         expected_to_trigger_suricata=False,
     ),
@@ -379,7 +389,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/xss_r/",
         query_params={"name": "Alice"},
         expected_classification="likely_false_positive",
-        expected_severity="Low",
+        expected_severity="low",
         expected_attack_type="Other",
         expected_to_trigger_suricata=False,
     ),
@@ -391,7 +401,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/sqli/",
         query_params={"id": "selection", "Submit": "Submit"},
         expected_classification="likely_false_positive",
-        expected_severity="Low",
+        expected_severity="low",
         expected_attack_type="Other",
         expected_to_trigger_suricata=False,
     ),
@@ -403,7 +413,7 @@ SCENARIOS: List[Scenario] = [
         path="/vulnerabilities/sqli/",
         query_params={"id": "42", "Submit": "Submit"},
         expected_classification="likely_false_positive",
-        expected_severity="Low",
+        expected_severity="low",
         expected_attack_type="Other",
         expected_to_trigger_suricata=False,
     ),
@@ -415,7 +425,7 @@ SCENARIOS: List[Scenario] = [
         path="/security.php",
         query_params={},
         expected_classification="likely_false_positive",
-        expected_severity="Low",
+        expected_severity="low",
         expected_attack_type="Other",
         expected_to_trigger_suricata=False,
     ),
@@ -427,7 +437,7 @@ SCENARIOS: List[Scenario] = [
         path="/about.php",
         query_params={},
         expected_classification="likely_false_positive",
-        expected_severity="Low",
+        expected_severity="low",
         expected_attack_type="Other",
         expected_to_trigger_suricata=False,
     ),
@@ -439,7 +449,7 @@ SCENARIOS: List[Scenario] = [
         path="/instructions.php",
         query_params={},
         expected_classification="likely_false_positive",
-        expected_severity="Low",
+        expected_severity="low",
         expected_attack_type="Other",
         expected_to_trigger_suricata=False,
     ),

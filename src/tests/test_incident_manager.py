@@ -26,8 +26,8 @@ import sys
 import time
 from pathlib import Path
 
-# Make src/ imports work from anywhere
-sys.path.insert(0, str(Path(__file__).parent))
+# Make src/ imports work from anywhere — tests/ sits one level below src/.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
 from incident_manager import IncidentManager
@@ -399,6 +399,47 @@ def test_incident_object_api() -> None:
     print("    PASS: Incident.add_alert handles ordering correctly")
 
 
+def test_force_regenerate_includes_recently_closed() -> None:
+    print("\n=== Test 11: Force regenerate includes recently-closed incidents ===")
+    _reset()
+
+    mgr = IncidentManager(
+        grouping_mode="per_actor",
+        time_window_minutes=0.02,    # ~1.2s, so incident closes fast
+        debounce_seconds=0.3,
+        sweep_interval_seconds=0.3,
+        on_regenerate=_record_regen,
+    )
+    mgr.start()
+
+    # Open + close one incident via the sweeper
+    mgr.process_alert(_make_alert("10.0.0.250"))
+    time.sleep(3.0)   # wait for debounce + window-expiry + sweep + final regen
+
+    # Confirm it actually closed
+    assert len(mgr.get_open_incidents()) == 0, (
+        "Pre-condition: incident should be closed by sweeper"
+    )
+    pre_force = len(_received_regenerations)
+
+    # Force regen with no open incidents — should still regenerate the
+    # recently-closed one (new behaviour per P4 follow-up).
+    count = mgr.force_regenerate_all()
+    assert count >= 1, (
+        f"Expected force_regenerate_all to include the closed incident, "
+        f"got count={count}"
+    )
+
+    time.sleep(1.0)
+    assert len(_received_regenerations) > pre_force, (
+        "Expected an additional regen after forcing on a closed incident"
+    )
+
+    mgr.stop(close_open=False)
+    print(f"    PASS: force_regenerate_all reached recently-closed incident "
+          f"(count={count})")
+
+
 # ============================================================================
 # Runner
 # ============================================================================
@@ -415,6 +456,7 @@ def main() -> int:
         test_force_regenerate,
         test_shutdown_closes_open_incidents,
         test_incident_object_api,
+        test_force_regenerate_includes_recently_closed,
     ]
 
     failed = []

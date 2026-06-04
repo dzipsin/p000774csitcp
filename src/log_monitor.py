@@ -15,12 +15,15 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import threading
 import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Callable, List, Optional
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -39,7 +42,7 @@ class AlertRecord:
 
     # --- Severity ---
     severity_level: int         # Suricata native: 1=critical … 4=informational
-    severity_label: str         # "critical" | "high" | "medium" | "low"
+    severity_label: str         # "critical" | "high" | "low"
 
     # --- Network tuple ---
     src_ip: str
@@ -63,14 +66,24 @@ class AlertRecord:
     raw_event: dict = field(compare=False)  # mutable but excluded from hash
 
     def to_dict(self) -> dict:
-        """Serialise to a plain dict (JSON-safe, raw_event excluded)."""
+        """Serialise to a plain dict (JSON-safe, raw_event excluded).
+
+        HTTP context from raw_event (url, method, status) is FLATTENED into
+        top-level keys so downstream consumers — notably the template
+        serializer — can read it without seeing the raw event blob.
+        """
         d = asdict(self)
-        d.pop("raw_event", None)
+        raw_event = d.pop("raw_event", None) or {}
+        http = raw_event.get("http") if isinstance(raw_event, dict) else None
+        if isinstance(http, dict):
+            d["http_url"] = str(http.get("url", "") or "")
+            d["http_method"] = str(http.get("http_method", "") or "")
+            d["http_status"] = http.get("status", "")
         return d
 
 
 
-_SEVERITY_MAP = {1: "critical", 2: "high", 3: "medium"}
+_SEVERITY_MAP = {1: "critical", 2: "high"}   # Suricata severity 3+ → "low"
 
 
 def _parse_line(line: str) -> Optional[AlertRecord]:
@@ -180,17 +193,17 @@ class LogMonitor:
             try:
                 cb(alert)
             except Exception as e:
-                print(f"[LogMonitor] subscriber {cb} raised: {e}")
+                log.exception("subscriber %s raised: %s", cb, e)
 
     def _run(self) -> None:
         # Wait for the log file to appear
         while not os.path.exists(self.eve_log_path):
             if self._stop_event.is_set():
                 return
-            print(f"[LogMonitor] waiting for {self.eve_log_path}...")
+            log.info("waiting for %s...", self.eve_log_path)
             time.sleep(2)
 
-        print(f"[LogMonitor] tailing {self.eve_log_path}")
+        log.info("tailing %s", self.eve_log_path)
         with open(self.eve_log_path, "r") as alert_log:
             alert_log.seek(0, io.SEEK_END)
             while not self._stop_event.is_set():

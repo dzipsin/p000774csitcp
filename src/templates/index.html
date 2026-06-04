@@ -41,7 +41,6 @@
     <div class="stat-cell"><div class="stat-label">Total Alerts</div><div class="stat-value" id="stat-total">0</div></div>
     <div class="stat-cell"><div class="stat-label">Critical</div><div class="stat-value critical" id="stat-critical">0</div></div>
     <div class="stat-cell"><div class="stat-label">High</div><div class="stat-value high" id="stat-high">0</div></div>
-    <div class="stat-cell"><div class="stat-label">Medium</div><div class="stat-value medium" id="stat-medium">0</div></div>
     <div class="stat-cell"><div class="stat-label">Low</div><div class="stat-value low" id="stat-low">0</div></div>
   </div>
 
@@ -50,10 +49,8 @@
     <button class="filter-btn active" data-filter="all">All</button>
     <button class="filter-btn f-critical" data-filter="critical">Critical</button>
     <button class="filter-btn f-high" data-filter="high">High</button>
-    <button class="filter-btn f-medium" data-filter="medium">Medium</button>
     <button class="filter-btn f-low" data-filter="low">Low</button>
     <div class="spacer"></div>
-    <button class="analyse-btn" id="analyse-btn" title="Legacy batch analysis (opens raw JSON)">Analyse (Batch)</button>
     <button class="clear-btn" id="clear-btn">Clear</button>
   </div>
 
@@ -87,7 +84,7 @@
     <button class="inc-filter-btn" data-inc-filter="open">Open</button>
     <button class="inc-filter-btn" data-inc-filter="closed">Closed</button>
     <div class="spacer"></div>
-    <button class="analyse-btn" id="regen-btn" title="Force regenerate all open incidents now">Force Regenerate</button>
+    <button class="accent-btn" id="regen-btn" title="Force regenerate all open incidents now">Force Regenerate</button>
     <button class="clear-btn" id="clear-incidents-btn">Clear Incidents</button>
   </div>
 

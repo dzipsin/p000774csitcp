@@ -10,7 +10,7 @@ Startup order (matters — each step assumes the previous ones completed):
   5. server.run()  — blocks until Ctrl+C
 
 Resolution order for sensitive/environment values:
-  1. Environment variable (e.g. EVE_LOG_PATH, API_KEY)
+  1. Environment variable (e.g. EVE_LOG_PATH, LOCAL_MODEL_URL)
   2. app.config value
   3. Hardcoded default
 """
@@ -26,11 +26,10 @@ from pathlib import Path
 
 from log_monitor import LogMonitor
 from web_server import Server
-from ai_module import AIAnalyzer
 from model_provider import ModelConfig, ProviderType, create_provider
 from incident_manager import IncidentManager
 from report_generator import ReportGenerator
-from storage import ReportStorage
+from report_db import ReportDatabase
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -43,8 +42,8 @@ logging.basicConfig(
 )
 
 for mod in (
-    "ai_module", "model_provider", "log_monitor",
-    "incident_manager", "report_generator", "storage", "web_server",
+    "model_provider", "log_monitor",
+    "incident_manager", "report_generator", "report_db", "web_server",
 ):
     logging.getLogger(mod).setLevel(logging.INFO)
 
@@ -94,7 +93,6 @@ POLL_INTERVAL = float(_get("monitor", "poll_interval", 0.5))
 GROUPING_MODE         = _get("incident", "grouping_mode", "per_actor")
 TIME_WINDOW_MINUTES   = float(_get("incident", "time_window_minutes", 2.0))
 DEBOUNCE_SECONDS      = float(_get("incident", "debounce_seconds", 3.0))
-REPORTS_DIR           = _get("incident", "reports_dir", "reports")
 SWEEP_INTERVAL        = float(_get("incident", "sweep_interval_seconds", 10.0))
 
 # Sanity-check grouping_mode (IncidentManager would raise otherwise, but nicer
@@ -118,6 +116,34 @@ MAX_RETRIES         = int(_analysis_cfg.get("max_retries", 1))
 
 
 # ---------------------------------------------------------------------------
+# Agent config (Phase 4 — agentic ReAct loop)
+# ---------------------------------------------------------------------------
+
+_agent_cfg              = _cfg.get("agent", {})
+AGENT_MODE              = str(_agent_cfg.get("mode", "single_shot")).lower()
+AGENT_MAX_ITERATIONS    = int(_agent_cfg.get("max_iterations", 3))
+AGENT_TOOL_TIMEOUT      = float(_agent_cfg.get("tool_timeout_seconds", 5.0))
+AGENT_TOTAL_BUDGET      = float(_agent_cfg.get("total_budget_seconds", 30.0))
+AGENT_TRACE_ENABLED     = bool(_agent_cfg.get("reasoning_trace_enabled", True))
+AGENT_AUTO_ENRICHMENT   = bool(_agent_cfg.get("auto_enrichment", True))
+
+_agent_tools_cfg        = _agent_cfg.get("tools", {})
+AGENT_TOOLS_ENABLED     = {
+    "get_alert_history":         bool(_agent_tools_cfg.get("get_alert_history", True)),
+    "lookup_environment_context": bool(_agent_tools_cfg.get("lookup_environment_context", True)),
+    "get_attack_pattern_stats":  bool(_agent_tools_cfg.get("get_attack_pattern_stats", True)),
+}
+
+# Environment lookup entries — list of dicts from [[agent.environment.entries]]
+_agent_env_cfg          = _agent_cfg.get("environment", {})
+AGENT_ENV_ENTRIES       = list(_agent_env_cfg.get("entries", []))
+
+if AGENT_MODE not in ("single_shot", "react"):
+    log.warning("Invalid agent.mode '%s' — defaulting to 'single_shot'", AGENT_MODE)
+    AGENT_MODE = "single_shot"
+
+
+# ---------------------------------------------------------------------------
 # Model config
 # ---------------------------------------------------------------------------
 
@@ -132,7 +158,6 @@ except ValueError:
 
 _provider_cfg = _model_cfg.get(_provider_name, {})
 _model_name   = _provider_cfg.get("model_name", "")
-_api_key      = os.getenv("API_KEY") or _provider_cfg.get("api_key", "")
 
 model_config = ModelConfig(
     provider        = _provider_type,
@@ -140,7 +165,6 @@ model_config = ModelConfig(
     max_tokens      = int(_model_cfg.get("max_tokens",  1024)),
     temperature     = float(_model_cfg.get("temperature", 0.0)),
     system_prompt   = _model_cfg.get("system_prompt") or None,
-    api_key         = _api_key,
     base_url        = _provider_cfg.get("base_url", ""),
     request_timeout = int(_provider_cfg.get("request_timeout", 120)),
 )
@@ -153,13 +177,25 @@ model_config = ModelConfig(
 monitor = LogMonitor(eve_log_path=EVE_LOG, poll_interval=POLL_INTERVAL)
 server  = Server(host=HOST, port=PORT, secret_key=SECRET)
 
-# Resolve reports_dir relative to repo root (parent of src/) unless absolute
-_reports_path = Path(REPORTS_DIR)
-if not _reports_path.is_absolute():
-    _reports_path = Path(__file__).parent.parent / _reports_path
+# Storage: SQLite-backed ReportDatabase. The legacy JSON-file backend was
+# dropped because the SQLite layer covered every consumer with one less moving
+# part. Schema bootstrap is idempotent; the file is created if missing.
+_storage_cfg = _cfg.get("storage", {}) or {}
+STORAGE_DB_PATH = str(_storage_cfg.get("db_path", "data/reports.db"))
+STORAGE_RETENTION_DAYS = int(_storage_cfg.get("retention_days", 90) or 0)
+STORAGE_CLEANUP_INTERVAL = float(_storage_cfg.get("cleanup_interval_seconds", 3600) or 0.0)
 
-storage = ReportStorage(str(_reports_path))
-log.info("Reports directory: %s", storage.directory)
+_db_path = Path(STORAGE_DB_PATH)
+if not _db_path.is_absolute():
+    _db_path = Path(__file__).parent.parent / _db_path
+storage = ReportDatabase(
+    db_path=str(_db_path),
+    retention_days=STORAGE_RETENTION_DAYS,
+)
+log.info(
+    "Storage: SQLite at %s (retention=%d days)",
+    _db_path, STORAGE_RETENTION_DAYS,
+)
 
 # Incident manager starts with no callback; we set it after creating the generator
 incident_manager = IncidentManager(
@@ -185,13 +221,58 @@ report_generator = None
 try:
     provider = create_provider(model_config)
 
-    # Legacy AIAnalyzer (for backward-compatible /api/analyse)
-    analyser = AIAnalyzer(
-        provider,
-        include_lab_context=INCLUDE_LAB_CONTEXT,
-        summary_mode=SUMMARY_MODE,
-    )
-    server.set_analyser(analyser)
+    # Build the ReActAgent if requested. Done in a try-block so a misconfigured
+    # tool registry doesn't block the rest of the pipeline — single-shot
+    # fallback keeps the system useful.
+    react_agent = None
+    if AGENT_MODE == "react":
+        try:
+            from tool_registry import ToolRegistry
+            from agent_tools import (
+                make_alert_history_tool,
+                make_environment_lookup_tool,
+                make_pattern_stats_tool,
+            )
+            from react_agent import ReActAgent
+
+            tool_registry = ToolRegistry()
+
+            if AGENT_TOOLS_ENABLED.get("get_alert_history", True):
+                tool_registry.register(
+                    make_alert_history_tool(incident_manager, storage),
+                )
+            if AGENT_TOOLS_ENABLED.get("lookup_environment_context", True):
+                tool_registry.register(
+                    make_environment_lookup_tool(AGENT_ENV_ENTRIES),
+                )
+            if AGENT_TOOLS_ENABLED.get("get_attack_pattern_stats", True):
+                tool_registry.register(
+                    make_pattern_stats_tool(incident_manager, storage),
+                )
+
+            react_agent = ReActAgent(
+                provider=provider,
+                tools=tool_registry,
+                max_iterations=AGENT_MAX_ITERATIONS,
+                tool_timeout_seconds=AGENT_TOOL_TIMEOUT,
+                total_budget_seconds=AGENT_TOTAL_BUDGET,
+                include_lab_context_in_fallback=INCLUDE_LAB_CONTEXT,
+                auto_enrichment=AGENT_AUTO_ENRICHMENT,
+            )
+            log.info(
+                "ReAct agent enabled: tools=%s, max_iter=%d, budget=%.0fs, auto_enrichment=%s",
+                tool_registry.list_names(), AGENT_MAX_ITERATIONS, AGENT_TOTAL_BUDGET,
+                AGENT_AUTO_ENRICHMENT,
+            )
+        except Exception as agent_err:  # noqa: BLE001 — degrade gracefully
+            log.warning(
+                "ReAct agent init failed (%s) — falling back to single_shot. "
+                "Set [agent].mode = 'single_shot' in app.config to silence this.",
+                agent_err,
+            )
+            react_agent = None
+
+    effective_agent_mode = "react" if react_agent is not None else "single_shot"
 
     # New ReportGenerator for incidents
     report_generator = ReportGenerator(
@@ -202,6 +283,13 @@ try:
         max_retries=MAX_RETRIES,
         is_repeat_offender=incident_manager.is_repeat_offender,
         on_report_ready=server.push_incident_report,
+        agent_mode=effective_agent_mode,
+        react_agent=react_agent,
+        # Pass env_entries so the rule-based suggestion generator and
+        # the LLM-suggestion filter keep working in single_shot mode —
+        # they derive facts deterministically from source_ip + env config
+        # when no reasoning trace exists.
+        env_entries=AGENT_ENV_ENTRIES,
     )
 
     # Wire IncidentManager -> ReportGenerator
@@ -211,8 +299,15 @@ try:
     server.set_incident_force_regenerate(incident_manager.force_regenerate_all)
     server.set_incident_clear_all(storage.clear_all)
 
+    # Phase 10: attach the storage backend so the Server can serve the
+    # history-query endpoints (/api/incidents/by-ip, /by-attack, /stats).
+    # Works for both SQLite (full feature set) and JSON (those endpoints
+    # return 503 — Server.set_storage falls back gracefully via hasattr).
+    server.set_storage(storage)
+
     log.info("Model provider : %s", model_config.provider.value)
     log.info("Model          : %s", model_config.model)
+    log.info("Agent mode     : %s", effective_agent_mode)
     log.info("Lab context    : %s", INCLUDE_LAB_CONTEXT)
     log.info("Summary mode   : %s", SUMMARY_MODE)
 
@@ -253,6 +348,13 @@ def _graceful_shutdown(signum, frame):
     except Exception:
         log.exception("Error stopping IncidentManager")
 
+    # Phase 10: stop the retention sweeper if it was started.
+    if hasattr(storage, "stop_retention_sweeper"):
+        try:
+            storage.stop_retention_sweeper()
+        except Exception:
+            log.exception("Error stopping retention sweeper")
+
     log.info("Shutdown complete")
     sys.exit(0)
 
@@ -276,6 +378,11 @@ if __name__ == "__main__":
     # IncidentManager first so its sweeper is live when alerts arrive.
     incident_manager.start()
     monitor.start()
+
+    # Phase 10: retention sweeper. Started only when the storage backend
+    # exposes start_retention_sweeper (SQLite does, JSON doesn't).
+    if hasattr(storage, "start_retention_sweeper"):
+        storage.start_retention_sweeper(STORAGE_CLEANUP_INTERVAL)
 
     # Blocks until server stops (Ctrl+C triggers _graceful_shutdown above)
     server.run()
