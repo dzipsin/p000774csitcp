@@ -5,7 +5,7 @@ Simulates the components talking to each other the way app.py would wire them,
 without needing Flask, Ollama, or an actual eve.json file.
 
 Covers:
-  1. AlertRecord → IncidentManager → ReportGenerator → server-style callback
+  1. AlertRecord -> IncidentManager -> ReportGenerator -> server-style callback
   2. Multiple alerts from same IP group into one incident
   3. Force-regenerate triggers a new report
   4. Incident closes via sweeper and fires a final regeneration
@@ -194,7 +194,7 @@ def test_pipeline_force_regenerate():
         manager = IncidentManager(
             grouping_mode="per_actor",
             time_window_minutes=5.0,
-            debounce_seconds=60.0,   # long — so debounce doesn't fire
+            debounce_seconds=60.0,   # long - so debounce doesn't fire
         )
         generator = ReportGenerator(
             provider=FakeProvider(),
@@ -356,7 +356,7 @@ def test_repeat_offender_flag():
         manager.process_alert(_make_alert(src_ip="10.0.0.99"))
         time.sleep(3.0)  # let first incident close
 
-        # Same IP again — should be flagged
+        # Same IP again - should be flagged
         manager.process_alert(_make_alert(src_ip="10.0.0.99"))
         time.sleep(2.0)
 
@@ -432,7 +432,7 @@ def test_pipeline_react_agent_path():
 <final_answer>
 {"classification": "true_positive", "severity": "critical",
  "summary": "SQLi credential extraction", "recommendation": "block_source_ip",
- "reasoning": "URL contains UNION SELECT user, password — credential exfiltration intent."}
+ "reasoning": "URL contains UNION SELECT user, password - credential exfiltration intent."}
 </final_answer>"""
 
     stage2_json = """{"overview": "SQLi from a single source.",
@@ -447,11 +447,11 @@ def test_pipeline_react_agent_path():
 
     # The pipeline regenerates twice: once on the debounce timer and once
     # again on stop(close_open=True). Each regen calls agent.classify()
-    # (Stage 1) and Stage 2's narrative — so we need 4 mock responses, two
+    # (Stage 1) and Stage 2's narrative - so we need 4 mock responses, two
     # pairs of [final_xml, stage2_json].
     provider = _ReActMockProvider([final_xml, stage2_json, final_xml, stage2_json])
 
-    # Empty tool registry — ReActAgent should still work; model picks
+    # Empty tool registry - ReActAgent should still work; model picks
     # direct final_answer without tools.
     registry = ToolRegistry()
     agent = ReActAgent(provider=provider, tools=registry, max_iterations=2)

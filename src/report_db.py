@@ -26,7 +26,7 @@ Threading model:
   - The thread-local connection cache means worker threads don't
     re-open connections per call.
 
-Schema bootstrap is idempotent — running on an existing DB is a no-op.
+Schema bootstrap is idempotent - running on an existing DB is a no-op.
 
 Depends on:
     stdlib only (sqlite3, threading, json, contextlib)
@@ -51,7 +51,7 @@ from models import IncidentReport
 try:
     from report_serializer import to_template_v1, validate_template_v1
     _TEMPLATE_SERIALIZER_AVAILABLE = True
-except ImportError:  # pragma: no cover — defensive only
+except ImportError:  # pragma: no cover - defensive only
     _TEMPLATE_SERIALIZER_AVAILABLE = False
 
 log = logging.getLogger(__name__)
@@ -201,7 +201,7 @@ class ReportDatabase:
             raise
 
     def _bootstrap_schema(self) -> None:
-        """Run the schema DDL. Idempotent — safe to invoke on an existing DB."""
+        """Run the schema DDL. Idempotent - safe to invoke on an existing DB."""
         conn = self._connection()
         # executescript() runs multiple statements without explicit BEGIN.
         # We don't wrap in a transaction; CREATE TABLE IF NOT EXISTS is
@@ -222,7 +222,7 @@ class ReportDatabase:
 
     def save(self, report: IncidentReport) -> Optional[Path]:
         """Upsert a report. Newer reports for the same incident_id replace
-        older ones — `save()` is also the in-place update path used when an
+        older ones - `save()` is also the in-place update path used when an
         incident is regenerated.
 
         Returns the database path on success, None on failure. Errors are
@@ -237,7 +237,7 @@ class ReportDatabase:
             if _TEMPLATE_SERIALIZER_AVAILABLE:
                 try:
                     validate_template_v1(payload)
-                except Exception as ve:  # noqa: BLE001 — log + write anyway
+                except Exception as ve:  # noqa: BLE001 - log + write anyway
                     log.warning(
                         "Template v1 schema validation failed for incident %s: %s",
                         report.incident_summary.incident_id, ve,
@@ -358,7 +358,7 @@ class ReportDatabase:
             )
             return self._db_path
 
-        except Exception as e:  # noqa: BLE001 — defensive boundary
+        except Exception as e:  # noqa: BLE001 - defensive boundary
             log.exception(
                 "Failed to save report for incident %s: %s",
                 getattr(getattr(report, "incident_summary", None), "incident_id", "?"), e,
@@ -433,7 +433,7 @@ class ReportDatabase:
         self, source_ip: str, since_epoch: Optional[float] = None,
     ) -> List[dict]:
         """All incidents from a given source IP, newest first. Optionally
-        bounded by `since_epoch` (POSIX seconds — incidents with
+        bounded by `since_epoch` (POSIX seconds - incidents with
         generated_at parsed to before this point are excluded)."""
         try:
             conn = self._connection()
@@ -552,7 +552,7 @@ class ReportDatabase:
                     params,
                 ).fetchall()
             }
-            # detected_attacks is a JSON column — aggregate by reading then
+            # detected_attacks is a JSON column - aggregate by reading then
             # tallying in Python. Cheap for demo volumes.
             attack_counter: Dict[str, int] = {}
             for r in conn.execute(
@@ -590,7 +590,7 @@ class ReportDatabase:
     def start_retention_sweeper(self, interval_seconds: float) -> None:
         """Start a background thread that calls cleanup_expired periodically.
 
-        Idempotent — calling twice is a no-op while the thread is alive.
+        Idempotent - calling twice is a no-op while the thread is alive.
         Set interval_seconds <= 0 OR retention_days = 0 to skip starting.
         """
         if interval_seconds <= 0 or self._retention_days <= 0:
@@ -609,10 +609,10 @@ class ReportDatabase:
                 "Retention sweeper started (interval=%.0fs, retention=%d days)",
                 interval_seconds, self._retention_days,
             )
-            # First pass at startup — clear anything already past its window.
+            # First pass at startup - clear anything already past its window.
             try:
                 self.cleanup_expired()
-            except Exception as e:  # noqa: BLE001 — sweeper must not crash
+            except Exception as e:  # noqa: BLE001 - sweeper must not crash
                 log.exception("Initial retention sweep raised: %s", e)
             while not self._sweeper_stop.is_set():
                 # wait() with timeout = sleep that can be cancelled cleanly

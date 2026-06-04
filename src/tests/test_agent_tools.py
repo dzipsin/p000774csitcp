@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-# Make src/ imports work from anywhere — tests/ sits one level below src/.
+# Make src/ imports work from anywhere - tests/ sits one level below src/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent_tools import (
@@ -94,7 +94,7 @@ def _make_alert(
 
 class _FakeStorage:
     """Minimal stand-in that satisfies the same list_reports() shape as
-    ReportDatabase — lets the agent-tool tests run without spinning up a
+    ReportDatabase - lets the agent-tool tests run without spinning up a
     real SQLite file."""
 
     def __init__(self, reports: List[Dict[str, Any]] = None):
@@ -123,7 +123,7 @@ def _make_report_dict(
 
 
 def _new_manager() -> IncidentManager:
-    """IncidentManager with safe-for-test settings — no sweeper started."""
+    """IncidentManager with safe-for-test settings - no sweeper started."""
     return IncidentManager(
         grouping_mode="per_actor",
         time_window_minutes=10.0,
@@ -298,7 +298,7 @@ def test_history_combined_dedupe_by_incident_id() -> None:
     open_incs = mgr.get_open_incidents()
     in_mem_inc_id = open_incs[0].incident_id  # use real ID from manager
 
-    # Disk has a report for the SAME incident_id — should not double-count
+    # Disk has a report for the SAME incident_id - should not double-count
     now_epoch = time.time()
     reports = [
         _make_report_dict(
@@ -357,7 +357,7 @@ def test_history_time_filter_excludes_old_alerts() -> None:
     storage = _FakeStorage([])
     tool = make_alert_history_tool(mgr, storage)
 
-    # 1-hour window — only the recent one
+    # 1-hour window - only the recent one
     result = tool.call({"src_ip": "10.0.0.8", "hours": 1})
     _assert(result.succeeded, "tool ran", result.error or "")
     out = result.output
@@ -562,7 +562,7 @@ def test_env_cidr_with_non_ip_query() -> None:
     _section("env_lookup: CIDR with non-IP query (e.g. URL) does not crash")
 
     tool = make_environment_lookup_tool(_docker_entries())
-    # URL string — should still try URL matchers, fail to match CIDR cleanly
+    # URL string - should still try URL matchers, fail to match CIDR cleanly
     result = tool.call({"query": "not.an.ip.string"})
     _assert(result.succeeded, "tool ran")
     _assert(result.output["match_found"] is False, "non-IP query produced clean miss")
@@ -809,7 +809,7 @@ def test_stats_dedup_by_incident_id() -> None:
     inc_id = mgr.get_open_incidents()[0].incident_id
 
     now_epoch = time.time()
-    # Disk report for SAME incident_id — should not double-count volume
+    # Disk report for SAME incident_id - should not double-count volume
     report = {
         "incident_summary": {
             "incident_id": inc_id,

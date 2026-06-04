@@ -4,7 +4,7 @@ tool_registry.py - Tool registry for the agentic ReAct triage loop.
 Provides ToolDefinition (metadata + validated callable wrapper) and
 ToolRegistry (collection used by ReActAgent to discover and execute tools).
 
-Tools are pure read functions over existing application state — they never
+Tools are pure read functions over existing application state - they never
 mutate state and have no external side effects. Each tool declares a
 JSONSchema-lite parameter schema; the registry validates arguments before
 invoking the underlying function and packages the result in a ToolResult.
@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# ToolResult — uniform return shape for any tool invocation
+# ToolResult - uniform return shape for any tool invocation
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -79,7 +79,7 @@ class ToolResult:
 
 
 # ---------------------------------------------------------------------------
-# ToolDefinition — metadata + validated callable
+# ToolDefinition - metadata + validated callable
 # ---------------------------------------------------------------------------
 
 # Supported JSONSchema-lite types
@@ -109,7 +109,7 @@ class ToolDefinition:
         }
 
     function takes a validated args dict and returns any JSON-serialisable
-    value. It MUST be a pure read function — the registry contract assumes
+    value. It MUST be a pure read function - the registry contract assumes
     tools have no side effects.
     """
     name: str
@@ -152,7 +152,7 @@ class ToolDefinition:
                 return {}, f"Missing required argument '{name}'"
             elif "default" in spec:
                 validated[name] = spec["default"]
-            # else: optional field with no default — omit from validated args
+            # else: optional field with no default - omit from validated args
 
         # Reject unknown args defensively. The model occasionally invents
         # parameters; surfacing the error in the observation lets it correct.
@@ -169,7 +169,7 @@ class ToolDefinition:
     def to_prompt_description(self) -> str:
         """Format this tool for inclusion in the LLM system prompt.
 
-        Output is compact, readable plain text — works on any LLM regardless
+        Output is compact, readable plain text - works on any LLM regardless
         of native function-calling support.
         """
         props: Dict[str, Dict[str, Any]] = self.parameters_schema.get("properties", {})
@@ -195,7 +195,7 @@ class ToolDefinition:
                     extras.append(f"max {spec['maximum']}")
                 extras_str = f" [{'; '.join(extras)}]" if extras else ""
 
-                lines.append(f"  - {name}{req_marker}: {type_str}{extras_str} — {desc}")
+                lines.append(f"  - {name}{req_marker}: {type_str}{extras_str} - {desc}")
             params_text = "\n".join(lines)
 
         return (
@@ -215,7 +215,7 @@ class ToolDefinition:
     ) -> ToolResult:
         """Validate args and execute the underlying function.
 
-        Always returns a ToolResult — exceptions are caught and packaged as
+        Always returns a ToolResult - exceptions are caught and packaged as
         error results so the agent loop never crashes mid-iteration.
 
         timeout_seconds is reserved for future use (subprocess-based tool
@@ -236,7 +236,7 @@ class ToolDefinition:
 
         try:
             output = self.function(validated)
-        except Exception as e:  # noqa: BLE001 — defensive boundary
+        except Exception as e:  # noqa: BLE001 - defensive boundary
             log.exception("Tool %s raised: %s", self.name, e)
             return ToolResult(
                 tool_name=self.name,
@@ -266,7 +266,7 @@ def _check_value(
     expected_type = spec.get("type")
     if expected_type and expected_type in _SUPPORTED_TYPES:
         py_type = _SUPPORTED_TYPES[expected_type]
-        # bool is an int in Python — guard against bools sneaking through int check
+        # bool is an int in Python - guard against bools sneaking through int check
         if expected_type == "integer" and isinstance(value, bool):
             return f"Argument '{name}' must be an integer, got bool"
         if not isinstance(value, py_type):
@@ -291,7 +291,7 @@ def _check_value(
 
 
 # ---------------------------------------------------------------------------
-# ToolRegistry — collection of available tools
+# ToolRegistry - collection of available tools
 # ---------------------------------------------------------------------------
 
 class ToolRegistry:
@@ -371,7 +371,7 @@ class ToolRegistry:
     def to_prompt_block(self) -> str:
         """Render all registered tools as a system-prompt block.
 
-        Output is plain text — model-agnostic. Empty registry returns a
+        Output is plain text - model-agnostic. Empty registry returns a
         placeholder string the agent prompt can include without breaking.
         """
         if not self._tools:

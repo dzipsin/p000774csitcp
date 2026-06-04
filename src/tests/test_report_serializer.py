@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-# Make src/ imports work from anywhere — tests/ sits one level below src/.
+# Make src/ imports work from anywhere - tests/ sits one level below src/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
@@ -205,7 +205,7 @@ def test_normalise_severity_legacy_dialects() -> None:
     # Legacy 4-tier "Medium" maps onto the Suricata P2 band (high).
     _assert(_normalise_severity("medium") == "high", "medium -> high (P2 bucket)")
     _assert(_normalise_severity("Medium") == "high", "capitalised Medium -> high")
-    # "info"/"informational" still seen from some upstream feeds — collapse to low.
+    # "info"/"informational" still seen from some upstream feeds - collapse to low.
     _assert(_normalise_severity("info") == "low", "info -> low")
     _assert(_normalise_severity("informational") == "low", "informational -> low")
     # Legacy TitleCase forms still parsable for back-compat with stored reports.
@@ -283,7 +283,7 @@ def test_serialise_alerts_renames_fields() -> None:
     _assert(alert["targeted_endpoint"] == "/vulnerabilities/sqli/", "endpoint path extracted")
     _assert(alert["http_method"] == "GET", "http_method extracted")
 
-    # Protocol — app_proto preferred (HTTP, not TCP)
+    # Protocol - app_proto preferred (HTTP, not TCP)
     _assert(alert["protocol"] == "HTTP", "app_proto upper preferred over transport")
 
     # Alert_id derived from non-zero flow_id
@@ -454,7 +454,7 @@ def test_bad_severity_enum_rejected() -> None:
 
     rec = _make_alert_record()
     payload = to_template_v1(_make_minimal_report([rec]))
-    # "Critical" (TitleCase) is no longer in the schema enum — the canonical
+    # "Critical" (TitleCase) is no longer in the schema enum - the canonical
     # form is lowercase "critical". This guards the schema against bypassing
     # normalisation.
     payload["incident_summary"]["overall_severity"] = "Critical"

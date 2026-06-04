@@ -51,7 +51,7 @@ class FireResult:
 class DVWAClient:
     """Lightweight HTTP client that maintains a DVWA session.
 
-    Not a general-purpose HTTP library — just enough to fire the scenarios
+    Not a general-purpose HTTP library - just enough to fire the scenarios
     we care about without pulling `requests` as a new dependency.
     """
 
@@ -175,7 +175,7 @@ class DVWAClient:
         """Send the HTTP request for a scenario, with the eval_id marker injected.
 
         Returns a FireResult with the timing and HTTP status.
-        Never raises on HTTP-level failures — records them in `error` so the
+        Never raises on HTTP-level failures - records them in `error` so the
         evaluation run can continue.
         """
         sent_at = time.time()
@@ -231,7 +231,7 @@ class DVWAClient:
                 return (full_url, resp.status)
         except urllib.error.HTTPError as e:
             # DVWA returns non-200 on some payloads; that's not a failure for
-            # our purposes — we still want to record what we fired.
+            # our purposes - we still want to record what we fired.
             return (full_url, e.code)
 
 

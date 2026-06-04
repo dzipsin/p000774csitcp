@@ -199,7 +199,7 @@ def correlate(
     incidents: List[Dict[str, Any]],
 ) -> None:
     """Mutate each ScenarioResult in place with its matched alert/classification."""
-    # Flatten incidents → (incident, alert, classification) triples
+    # Flatten incidents -> (incident, alert, classification) triples
     all_alert_tuples: List[tuple] = []
     for inc in incidents:
         alerts = inc.get("alerts", []) or []
@@ -207,7 +207,7 @@ def correlate(
         classifications_by_alert_id = {}
 
         # alert_analyses uses its own alert_id (from flow_id or uuid). The raw
-        # alerts in inc.alerts are a different shape. We match on index — both
+        # alerts in inc.alerts are a different shape. We match on index - both
         # lists are in the same order because ReportGenerator zips them.
         for i, alert in enumerate(alerts):
             cls = analyses[i] if i < len(analyses) else None
@@ -215,7 +215,7 @@ def correlate(
 
     for sr in scenario_results:
         if sr.fire.error or sr.fire.http_status == 0:
-            # Fire itself failed — no point correlating
+            # Fire itself failed - no point correlating
             sr.status = "fire_failed"
             continue
 
@@ -240,7 +240,7 @@ def correlate(
             classification_status = cls.get("classification_status", "complete")
 
             if not actual_classification:
-                # Legacy fallback — shouldn't happen with current reports
+                # Legacy fallback - shouldn't happen with current reports
                 actual_classification = _derive_classification_from_analysis(
                     cls, inc.get("incident_summary", {})
                 )
@@ -289,7 +289,7 @@ def _find_best_match(
         # Look for eval_id in every place it might be stored:
         # 1. alert.raw_event.http.url  (pre-serialisation)
         # 2. alert_analysis.payload_observed  (post-serialisation, via payload_observed)
-        # 3. incident.alerts[i].signature  (fallback — unlikely to help but harmless)
+        # 3. incident.alerts[i].signature  (fallback - unlikely to help but harmless)
         url_candidates = []
 
         if isinstance(alert, dict):
@@ -305,7 +305,7 @@ def _find_best_match(
         if not any(marker in u for u in url_candidates if u):
             continue
 
-        # Timestamp check — alert should be after fire, but give a generous window
+        # Timestamp check - alert should be after fire, but give a generous window
         alert_epoch = 0.0
         if isinstance(alert, dict):
             alert_epoch = alert.get("timestamp_epoch", 0) or 0
@@ -333,7 +333,7 @@ def _derive_classification_from_analysis(
     """The AlertAnalysis dataclass doesn't carry the TP/FP label directly; we
     infer it from the confidence score and the summary's classification counts.
 
-    Actually — we can do better by inspecting the overall incident severity and
+    Actually - we can do better by inspecting the overall incident severity and
     confidence. Low confidence + Low severity == likely_false_positive.
     Alternatively the summary's classification_counts tells us about the incident
     as a whole but not this specific alert.

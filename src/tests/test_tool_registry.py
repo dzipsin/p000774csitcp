@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-# Make src/ imports work from anywhere — tests/ sits one level below src/.
+# Make src/ imports work from anywhere - tests/ sits one level below src/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tool_registry import ToolDefinition, ToolRegistry, ToolResult
@@ -98,7 +98,7 @@ def _enum_tool() -> ToolDefinition:
 
 
 def _raising_tool() -> ToolDefinition:
-    """Tool whose function always raises — exercises error path."""
+    """Tool whose function always raises - exercises error path."""
     def _explode(args):  # noqa: ARG001
         raise RuntimeError("intentional test failure")
 
