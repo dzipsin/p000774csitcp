@@ -240,14 +240,8 @@ def correlate(
             classification_status = cls.get("classification_status", "complete")
 
             if not actual_classification:
-                # Legacy fallback - shouldn't happen with current reports
-                actual_classification = _derive_classification_from_analysis(
-                    cls, inc.get("incident_summary", {})
-                )
-            if not actual_severity:
-                actual_severity = _derive_severity_from_analysis(
-                    cls, inc.get("incident_summary", {})
-                )
+                sr.status = "classification_error"
+                continue
 
             sr.classification = {
                 "classification": actual_classification,
@@ -325,48 +319,6 @@ def _find_best_match(
     # Otherwise take the first (chronologically: they're in insertion order)
     return candidates[0]
 
-
-def _derive_classification_from_analysis(
-    analysis: Dict[str, Any],
-    summary: Dict[str, Any],
-) -> str:
-    """The AlertAnalysis dataclass doesn't carry the TP/FP label directly; we
-    infer it from the confidence score and the summary's classification counts.
-
-    Actually - we can do better by inspecting the overall incident severity and
-    confidence. Low confidence + Low severity == likely_false_positive.
-    Alternatively the summary's classification_counts tells us about the incident
-    as a whole but not this specific alert.
-
-    The cleanest fix is to add the per-alert classification into
-    alert_analyses at the source. For this evaluation, we do a best-effort derive:
-      - If confidence >= 0.7 AND the incident's overall severity is critical/high,
-        treat as true_positive
-      - Else likely_false_positive
-    """
-    confidence = analysis.get("confidence_score", 0.0) or 0.0
-    overall_severity = summary.get("overall_severity", "low")
-    attack_type = analysis.get("attack_type_classified", "Other")
-
-    if attack_type in ("SQLi", "XSS", "CommandInjection", "PathTraversal",
-                       "FileInclusion", "BruteForce") and confidence >= 0.5:
-        return "true_positive"
-    if overall_severity in ("critical", "high") and confidence >= 0.6:
-        return "true_positive"
-    return "likely_false_positive"
-
-
-def _derive_severity_from_analysis(
-    analysis: Dict[str, Any],
-    summary: Dict[str, Any],
-) -> str:
-    """Use the incident's overall_severity as the per-alert severity proxy.
-
-    The true Stage 1 classification has a per-alert severity, but it isn't
-    preserved in alert_analyses. Using overall severity is a reasonable proxy
-    for incidents where all alerts are the same type.
-    """
-    return summary.get("overall_severity", "low")
 
 
 # ---------------------------------------------------------------------------
