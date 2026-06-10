@@ -795,10 +795,9 @@ class ReportGenerator:
             incident.alert_count, incident.status,
         )
 
-        # Defensive: empty incident shouldn't happen but handle it
         if incident.alert_count == 0:
-            log.warning("Incident %s has 0 alerts, producing empty report", incident.incident_id)
-            return self._build_empty_report(incident)
+            log.warning("Incident %s has 0 alerts", incident.incident_id)
+            return self._build_error_report(incident, "Incident has no alerts")
 
         # --- Stage 1: per-alert classification ---
         classifications = self._run_stage1(incident.alerts)
@@ -971,7 +970,7 @@ class ReportGenerator:
             alert_exposures=alert_exposures,
             information_exposure_description=exposure_desc,
             model_used=self._provider.model_name,
-            provider_type=self._provider.provider_type.value,
+            provider_type="ollama",
             generation_status=gen_status,
             generation_error=None if gen_status != "error" else "All alert classifications failed",
         )
@@ -1366,7 +1365,7 @@ class ReportGenerator:
                 impact_assessment="Unable to assess impact due to generation error.",
             ),
             model_used=getattr(self._provider, "model_name", None),
-            provider_type=getattr(self._provider.provider_type, "value", None) if hasattr(self._provider, "provider_type") else None,
+            provider_type="ollama",
             generation_status="error",
             generation_error=error_msg,
         )
@@ -1376,55 +1375,6 @@ class ReportGenerator:
 
         return report
 
-    def _build_empty_report(self, incident: Incident) -> IncidentReport:
-        """Produce a near-empty report for an incident with no alerts."""
-        now_iso = datetime.now(timezone.utc).isoformat()
-
-        summary = IncidentSummary(
-            incident_id=incident.incident_id,
-            report_id=str(uuid.uuid4()),
-            report_version=f"v{incident.report_version}",
-            incident_status=incident.status,
-            generated_at=now_iso,
-            last_updated_at=now_iso,
-            first_seen="N/A",
-            last_seen="N/A",
-            source_ip=incident.source_ip,
-            total_alerts=0,
-            classification_counts={"true_positive": 0, "likely_false_positive": 0, "error": 0},
-            detected_attacks=[],
-            overall_severity="low",
-            overall_cvss_estimate=0.0,
-            repeat_offender=False,
-        )
-
-        return IncidentReport(
-            incident_summary=summary,
-            alerts=[],
-            incident_summary_description=IncidentSummaryDescription(
-                overview="Empty incident with no alerts.",
-                attack_vectors=[],
-                overall_attack_stage="",
-                ai_suggestions=[],
-            ),
-            alert_analyses=[],
-            information_exposure=InformationExposure(
-                exposure_detected=False,
-                exposure_types=[],
-                affected_systems=[],
-                data_sensitive_rating="unknown",
-                indicators_of_compromise=[],
-            ),
-            alert_exposures=[],
-            information_exposure_description=InformationExposureDescription(
-                exposure_summary="No alerts in this incident.",
-                impact_assessment="No impact assessment possible without alerts.",
-            ),
-            model_used=getattr(self._provider, "model_name", None),
-            provider_type=getattr(self._provider.provider_type, "value", None) if hasattr(self._provider, "provider_type") else None,
-            generation_status="complete",
-            generation_error=None,
-        )
 
 
 # ---------------------------------------------------------------------------
