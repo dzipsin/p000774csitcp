@@ -52,9 +52,11 @@ from tool_registry import ToolRegistry, ToolResult
 
 # Reuse the existing single-shot helpers (prompt builders + JSON validators).
 # They are pure functions, stable, and shared across both paths.
-from report_generator import (
+from prompts import (
     _build_stage1_system_prompt as _build_singleshot_system_prompt,
     _build_stage1_user_prompt as _build_singleshot_user_prompt,
+)
+from rule_engine import (
     _parse_json_response as _parse_classification_json,
     _validate_stage1_response as _validate_classification,
 )

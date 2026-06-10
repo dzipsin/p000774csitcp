@@ -40,9 +40,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from log_monitor import AlertRecord
 from models import Incident, extract_attack_type
 from report_db import ReportDatabase
-from report_generator import (
-    ReportGenerator,
-    _override_mitre_tactic,
+from report_generator import ReportGenerator
+from rule_engine import _override_mitre_tactic
+from suggestions import (
     _generate_rule_based_suggestions,
     _filter_generic_llm_suggestions,
     _filter_llm_against_enrichment,
