@@ -26,7 +26,7 @@ Contracts:
 
 Depends on:
     log_monitor.AlertRecord
-    model_provider.ModelProvider
+    model_provider.OllamaProvider
     models.AlertClassification, ReasoningStep, extract_attack_type
     tool_registry.ToolRegistry
     report_generator (reused prompt builders + JSON validators)
@@ -42,7 +42,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from log_monitor import AlertRecord
-from model_provider import ModelProvider
+from model_provider import OllamaProvider
 from models import (
     AlertClassification,
     ReasoningStep,
@@ -274,7 +274,7 @@ class ReActAgent:
 
     def __init__(
         self,
-        provider: ModelProvider,
+        provider: OllamaProvider,
         tools: ToolRegistry,
         max_iterations: int = 3,
         tool_timeout_seconds: float = 5.0,

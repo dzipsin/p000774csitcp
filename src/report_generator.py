@@ -21,7 +21,7 @@ Design principles:
 
 Depends on:
   models.*                     - dataclasses
-  model_provider.ModelProvider - LLM backend abstraction
+  model_provider.OllamaProvider - LLM backend
   report_db.ReportDatabase     - SQLite-backed persistence
 
 The frontend consumes the per-incident output of this module via
@@ -40,7 +40,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from log_monitor import AlertRecord
-from model_provider import ModelProvider
+from model_provider import OllamaProvider
 from models import (
     AlertAnalysis,
     AlertClassification,
@@ -689,7 +689,7 @@ class ReportGenerator:
 
     def __init__(
         self,
-        provider: ModelProvider,
+        provider: OllamaProvider,
         storage: Optional[ReportDatabase] = None,
         include_lab_context: bool = True,
         summary_mode: str = "llm",

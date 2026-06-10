@@ -39,7 +39,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
 from models import Incident, extract_attack_type
-from model_provider import ModelProvider, ProviderType
 from report_db import ReportDatabase
 from report_generator import (
     ReportGenerator,
@@ -64,7 +63,7 @@ logging.basicConfig(
 # Mock provider - simulates Ollama without the server
 # ============================================================================
 
-class MockProvider(ModelProvider):
+class MockProvider:
     """Scriptable fake LLM provider.
 
     Pre-program responses with `set_stage1_responses()` and `set_stage2_response()`.
@@ -79,10 +78,6 @@ class MockProvider(ModelProvider):
         self._stage2_raise = None
         self._stage1_call_count = 0
         self._stage2_call_count = 0
-
-    @property
-    def provider_type(self) -> ProviderType:
-        return ProviderType.OLLAMA
 
     @property
     def model_name(self) -> str:

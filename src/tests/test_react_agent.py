@@ -39,7 +39,6 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
-from model_provider import ModelProvider, ProviderType
 from models import AlertClassification, ReasoningStep
 from tool_registry import ToolDefinition, ToolRegistry
 from react_agent import (
@@ -79,8 +78,8 @@ def _section(title: str) -> None:
 # Fixtures
 # ---------------------------------------------------------------------------
 
-class MockProvider(ModelProvider):
-    """ModelProvider that replays a canned list of responses in order.
+class MockProvider:
+    """Replays a canned list of responses in order.
 
     Each entry can be a string (returned as-is) or an Exception instance
     (raised when .complete() is called). Useful for simulating LLM
@@ -133,10 +132,6 @@ class MockProvider(ModelProvider):
         if isinstance(item, Exception):
             raise item
         return str(item)
-
-    @property
-    def provider_type(self) -> ProviderType:
-        return ProviderType.OLLAMA
 
     @property
     def model_name(self) -> str:
