@@ -10,7 +10,7 @@ Reads Suricata IDS alerts from `eve.json`, groups them into incidents by source 
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| Kali Linux | 2025.x+ (amd64) | Primary platform |
+| Linux | Kali 2025.x+ recommended | Python 3.11+, Suricata, and Ollama must be available |
 | Python | 3.11+ | `tomllib` requires 3.11+ |
 | Suricata | 7+ | IDS alert source |
 | Ollama | Latest | Local LLM server |
