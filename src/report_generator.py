@@ -109,19 +109,17 @@ No markdown code fences. No text outside the JSON.
   "reasoning": "2-3 sentences explaining your classification"
 }"""
 
-_STAGE1_LAB_CONTEXT = """
-
-LAB ENVIRONMENT CONTEXT:
-This is a controlled lab with the following known infrastructure:
-- Docker network 172.18.0.0/16 hosts DVWA (vulnerable web app) and MariaDB.
-- 172.18.0.2 is MariaDB (port 3306). Traffic between 172.18.0.3 and 172.18.0.2
-  on port 3306 is EXPECTED internal database communication. Classify these
-  as likely_false_positive.
-- 172.18.0.3 is DVWA on port 80.
-- External IPs (e.g. 192.168.56.x) reaching port 80 on 172.18.0.3 represent
-  user or attacker traffic.
-- "Suspicious inbound to mySQL port 3306" alerts between Docker-internal IPs
-  are infrastructure noise, NOT attacks."""
+def _build_lab_context(env_entries: List[Dict[str, Any]]) -> str:
+    """Build environment context block from [[agent.environment.entries]] config."""
+    if not env_entries:
+        return ""
+    lines = ["\n\nENVIRONMENT CONTEXT:"]
+    for entry in env_entries:
+        pattern = entry.get("pattern", "")
+        description = entry.get("description", "")
+        if pattern and description:
+            lines.append(f"- {pattern}: {description}")
+    return "\n".join(lines)
 
 
 # Stage 2: incident narrative prompt template
@@ -152,13 +150,13 @@ account, timestamp), and (c) a reason citing enrichment context (prior
 alert count, environment role, observed payload).
 
 GOOD examples:
-  - "Block 192.168.56.1 at the WAF - repeat offender with 14 prior SQLi
+  - "Block 198.51.100.1 at the WAF - repeat offender with 14 prior SQLi
      alerts in last 24h."
-  - "Investigate session tokens issued to /vulnerabilities/xss_r/
+  - "Investigate session tokens issued to /app/login
      between 17:38 and 17:39 UTC - reflected XSS payload may have stolen
      them."
   - "Tune Suricata to suppress ET SCAN inbound to MySQL when both src
-     and dst are within 172.18.0.0/16 - documented internal traffic."
+     and dst are within 10.0.0.0/8 - documented internal traffic."
 
 BAD examples (DO NOT produce these - they will be dropped):
   - "Implement additional security controls for the source IP." (no
@@ -312,10 +310,13 @@ def _validate_stage1_response(data: dict) -> dict:
 _MAX_URL_LEN_IN_PROMPT = 500
 
 
-def _build_stage1_system_prompt(include_lab_context: bool) -> str:
+def _build_stage1_system_prompt(
+    include_lab_context: bool,
+    env_entries: Optional[List[Dict[str, Any]]] = None,
+) -> str:
     prompt = _STAGE1_SYSTEM_BASE
     if include_lab_context:
-        prompt += _STAGE1_LAB_CONTEXT
+        prompt += _build_lab_context(env_entries or [])
     return prompt
 
 
@@ -756,7 +757,9 @@ class ReportGenerator:
         # facts without a reasoning trace (single_shot mode fallback).
         self._env_entries = list(env_entries or [])
 
-        self._stage1_system_prompt = _build_stage1_system_prompt(include_lab_context)
+        self._stage1_system_prompt = _build_stage1_system_prompt(
+            include_lab_context, self._env_entries
+        )
 
         log.info(
             "ReportGenerator ready: agent_mode=%s, lab_context=%s, "
@@ -1693,9 +1696,15 @@ def _generate_rule_based_suggestions(
         sig_counts = Counter(a.signature for a in incident.alerts if a.signature)
         if sig_counts:
             dominant_sig, _ = sig_counts.most_common(1)[0]
+            internal_cidr = next(
+                (e["pattern"] for e in (env_entries or [])
+                 if e.get("match_type") == "cidr"
+                 and e.get("classification_hint") != "untrusted_source_likely_attacker"),
+                "the documented internal network",
+            )
             suggestions.append(
                 f"Tune Suricata to suppress \"{dominant_sig}\" when both src "
-                f"and dst are within 172.18.0.0/16 - documented internal "
+                f"and dst are within {internal_cidr} - documented internal "
                 f"traffic; all {fp_count} alert(s) classified false_positive."
             )
 
