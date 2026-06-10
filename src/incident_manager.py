@@ -12,9 +12,8 @@ Threading model:
   - Public methods are safe to call from any thread (guarded by self._lock)
   - One background "sweeper" thread closes incidents whose time window expired
   - Per-incident debounce timers run on their own threading.Timer threads
-  - The regeneration callback runs on a dedicated worker thread (one at a time
-    per incident; if called while already running for the same incident, the
-    second call is queued)
+  - The regeneration callback runs on a per-incident ThreadPoolExecutor
+    (max_workers=1), which serialises jobs and queues follow-ups automatically
 
 Depends on:
   log_monitor.AlertRecord
@@ -28,6 +27,7 @@ import logging
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from log_monitor import AlertRecord
@@ -99,13 +99,10 @@ class IncidentManager:
         # Debounce timers, keyed by incident_id.
         self._debounce_timers: Dict[str, threading.Timer] = {}
 
-        # Tracks incident_ids that are currently being regenerated, so we can
-        # queue follow-up regenerations without overlap.
-        self._regenerating: set[str] = set()
-
-        # Pending regeneration flags - if True, another regeneration is needed
-        # as soon as the current one finishes.
-        self._pending_regenerate: set[str] = set()
+        # Per-incident single-threaded executors. max_workers=1 ensures
+        # regenerations for the same incident run one at a time; the executor
+        # queues any follow-up submitted while one is already running.
+        self._regen_executors: Dict[str, ThreadPoolExecutor] = {}
 
         # Source IPs seen in the current session. Used for repeat_offender flag.
         self._seen_source_ips: set[str] = set()
@@ -429,12 +426,6 @@ class IncidentManager:
             incident.incident_id, incident.alert_count, final,
         )
 
-        # Queue a final regeneration outside the lock (deferred to caller)
-        # We do this by setting pending flag and letting the caller trigger it.
-        if final and self._on_regenerate is not None:
-            # We can't call the callback here because we hold the lock.
-            # Signal to caller that they should trigger.
-            self._pending_regenerate.add(incident.incident_id)
 
     def _close_all_open_incidents(self, final: bool) -> None:
         """Close every open incident. Used on shutdown."""
@@ -510,74 +501,44 @@ class IncidentManager:
     # ------------------------------------------------------------------
 
     def _trigger_regenerate(self, incident_id: str) -> None:
-        """Fire the regenerate callback on a background thread.
+        """Submit a regeneration job to the per-incident executor.
 
-        If a regeneration is already running for this incident, mark it as
-        pending so we'll regenerate again after the current run finishes.
+        The executor has max_workers=1 so jobs run one at a time; any follow-up
+        submitted while one is already running queues automatically.
         """
         with self._lock:
-            if incident_id in self._regenerating:
-                # Already running - flag for another pass
-                self._pending_regenerate.add(incident_id)
-                log.debug(
-                    "Regen already in progress for %s - queuing follow-up",
-                    incident_id,
+            if incident_id not in self._regen_executors:
+                self._regen_executors[incident_id] = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix=f"regen-{incident_id[:8]}"
                 )
-                return
+            executor = self._regen_executors[incident_id]
 
-            # Mark as running
-            self._regenerating.add(incident_id)
-
-        # Spawn a worker thread - don't block the caller
-        worker = threading.Thread(
-            target=self._regenerate_worker,
-            args=(incident_id,),
-            daemon=True,
-            name=f"regen-{incident_id[:8]}",
-        )
-        worker.start()
+        executor.submit(self._regenerate_worker, incident_id)
 
     def _regenerate_worker(self, incident_id: str) -> None:
-        """Worker thread that calls on_regenerate and handles queueing."""
+        """Worker called by the per-incident executor."""
+        incident = self._find_incident(incident_id)
+        if incident is None:
+            log.warning("Regen worker: incident %s not found, skipping", incident_id)
+            return
+
+        cb = self._on_regenerate
+        if cb is None:
+            log.warning("Regen worker: no callback set, skipping")
+            return
+
+        with self._lock:
+            incident.report_version += 1
+
+        log.info(
+            "Regenerating incident %s (v%d, alerts=%d, status=%s)",
+            incident_id, incident.report_version, incident.alert_count, incident.status,
+        )
+
         try:
-            # Grab the incident snapshot (may be open or just closed)
-            incident = self._find_incident(incident_id)
-            if incident is None:
-                log.warning(
-                    "Regen worker: incident %s not found, skipping", incident_id,
-                )
-                return
-
-            cb = self._on_regenerate
-            if cb is None:
-                log.warning("Regen worker: no callback set, skipping")
-                return
-
-            # Bump version before invoking, so the report reflects the new version
-            with self._lock:
-                incident.report_version += 1
-
-            log.info(
-                "Regenerating incident %s (v%d, alerts=%d, status=%s)",
-                incident_id, incident.report_version, incident.alert_count, incident.status,
-            )
-
-            try:
-                cb(incident)
-            except Exception as e:
-                log.exception("Regen callback raised for incident %s: %s", incident_id, e)
-
-        finally:
-            # Clear running flag and check for queued follow-ups
-            with self._lock:
-                self._regenerating.discard(incident_id)
-                queued = incident_id in self._pending_regenerate
-                if queued:
-                    self._pending_regenerate.discard(incident_id)
-
-            if queued:
-                log.debug("Queued regen for %s - firing another pass", incident_id)
-                self._trigger_regenerate(incident_id)
+            cb(incident)
+        except Exception as e:
+            log.exception("Regen callback raised for incident %s: %s", incident_id, e)
 
     def _trigger_regenerate_sync(self, incident: Incident) -> None:
         """Synchronous regeneration used during shutdown.
@@ -650,6 +611,9 @@ class IncidentManager:
             ]
             for iid in to_evict:
                 self._recently_closed.pop(iid, None)
+                ex = self._regen_executors.pop(iid, None)
+                if ex is not None:
+                    ex.shutdown(wait=False)
             if to_evict:
                 log.debug("Evicted %d stale closed incidents", len(to_evict))
 
