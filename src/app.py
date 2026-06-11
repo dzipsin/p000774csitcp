@@ -104,7 +104,7 @@ def _check_suricata_running(process_name: str) -> None:
 
     try:
         result = subprocess.run(
-            ["pgrep", "-x", process_name],
+            ["pgrep", "-fi", process_name],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
