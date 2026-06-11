@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -84,6 +85,42 @@ SECRET     = _get("server", "secret_key", "suricata-dashboard")
 
 EVE_LOG       = os.getenv("EVE_LOG_PATH") or _get("monitor", "eve_log", "/var/log/suricata/eve.json")
 POLL_INTERVAL = float(_get("monitor", "poll_interval", 0.5))
+
+
+# ---------------------------------------------------------------------------
+# Suricata process check (Linux only)
+# ---------------------------------------------------------------------------
+
+REQUIRE_SURICATA      = bool(_get("suricata", "require_running", True))
+SURICATA_PROCESS_NAME = str(_get("suricata", "process_name", "suricata"))
+
+
+def _check_suricata_running(process_name: str) -> None:
+    """ Ensure the Suricata IDS process is running before startup.
+        Calls sys.exit(1) if Suricata isn't found. """
+    if not sys.platform.startswith("linux"):
+        log.info("Suricata check skipped (platform '%s' is not Linux)", sys.platform)
+        return
+
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", process_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        log.warning("Cannot verify Suricata: 'pgrep' not found on PATH - skipping check")
+        return
+
+    if result.returncode != 0:
+        log.error("Suricata process '%s' is not running", process_name)
+        sys.exit(1)
+
+    log.info("Suricata process '%s' is running", process_name)
+
+
+if REQUIRE_SURICATA:
+    _check_suricata_running(SURICATA_PROCESS_NAME)
 
 
 # ---------------------------------------------------------------------------
