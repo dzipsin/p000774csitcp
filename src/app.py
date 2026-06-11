@@ -26,7 +26,7 @@ from pathlib import Path
 
 from log_monitor import LogMonitor
 from web_server import Server
-from model_provider import ModelConfig, OllamaProvider
+from model_provider import ModelConfig, ModelProvider, ProviderType, create_provider
 from incident_manager import IncidentManager
 from report_generator import ReportGenerator
 from report_db import ReportDatabase
@@ -146,11 +146,14 @@ if AGENT_MODE not in ("single_shot", "react"):
 # Model config
 # ---------------------------------------------------------------------------
 
-_model_cfg    = _cfg.get("model", {})
-_provider_cfg = _model_cfg.get("ollama", {})
-_model_name   = _provider_cfg.get("model_name", "")
+_model_cfg      = _cfg.get("model", {})
+_provider_str   = _model_cfg.get("provider", ProviderType.OLLAMA.value)
+_provider_type  = ProviderType(_provider_str)
+_provider_cfg   = _model_cfg.get(_provider_str, {})
+_model_name     = _provider_cfg.get("model_name", "")
 
 model_config = ModelConfig(
+    provider        = _provider_type,
     model           = _model_name,
     max_tokens      = int(_model_cfg.get("max_tokens",  1024)),
     temperature     = float(_model_cfg.get("temperature", 0.0)),
@@ -209,7 +212,7 @@ log.info(
 report_generator = None
 
 try:
-    provider = OllamaProvider(model_config)
+    provider = create_provider(model_config)
 
     # Build the ReActAgent if requested. Done in a try-block so a misconfigured
     # tool registry doesn't block the rest of the pipeline - single-shot

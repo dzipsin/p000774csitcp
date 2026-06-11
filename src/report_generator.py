@@ -21,7 +21,7 @@ Design principles:
 
 Depends on:
   models.*                     - dataclasses
-  model_provider.OllamaProvider - LLM backend
+  model_provider.ModelProvider  - LLM backend interface
   report_db.ReportDatabase     - SQLite-backed persistence
 
 The frontend consumes the per-incident output of this module via
@@ -35,10 +35,13 @@ import logging
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from react_agent import ReActAgent
 
 from log_monitor import AlertRecord
-from model_provider import OllamaProvider
+from model_provider import ModelProvider
 from models import (
     AlertAnalysis,
     AlertClassification,
@@ -112,7 +115,7 @@ class ReportGenerator:
 
     def __init__(
         self,
-        provider: OllamaProvider,
+        provider: ModelProvider,
         storage: Optional[ReportDatabase] = None,
         include_lab_context: bool = True,
         summary_mode: str = "llm",
@@ -120,12 +123,12 @@ class ReportGenerator:
         is_repeat_offender: Optional[Callable[[str], bool]] = None,
         on_report_ready: Optional[Callable[[IncidentReport], None]] = None,
         agent_mode: str = "single_shot",
-        react_agent: Optional[object] = None,
+        react_agent: Optional[ReActAgent] = None,
         env_entries: Optional[List[Dict[str, Any]]] = None,
     ):
         """
         Args:
-            provider: local LLM backend (currently OllamaProvider)
+            provider: LLM backend (any ModelProvider implementation)
             storage: ReportDatabase for persisting reports (None = don't persist)
             include_lab_context: include Docker lab details in Stage 1 prompt
             summary_mode: "llm" or "template" for Stage 2
@@ -135,10 +138,6 @@ class ReportGenerator:
             agent_mode: "single_shot" (default) keeps original behavior.
                         "react" delegates per-alert classification to react_agent.
             react_agent: a ReActAgent instance. Required when agent_mode='react'.
-                         Typed as `object` here to avoid an import-time
-                         dependency on react_agent (which in turn imports
-                         from report_generator). The duck-type contract is
-                         react_agent.classify(alert) -> AlertClassification.
             env_entries: [[agent.environment.entries]] from app.config. Used
                          by the rule-based suggestion generator and the
                          LLM-suggestion filter to derive env facts from
