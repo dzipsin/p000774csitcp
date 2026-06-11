@@ -10,7 +10,7 @@ Reads Suricata IDS alerts from `eve.json`, groups them into incidents by source 
 
 | Tool | Version | Notes |
 |------|---------|-------|
-| Kali Linux | 2025.x+ (amd64) | Primary platform |
+| Linux | Kali 2025.x+ recommended | Python 3.11+, Suricata, and Ollama must be available |
 | Python | 3.11+ | `tomllib` requires 3.11+ |
 | Suricata | 7+ | IDS alert source |
 | Ollama | Latest | Local LLM server |
@@ -209,12 +209,17 @@ src/
   log_monitor.py         # Tails eve.json, emits AlertRecord
   incident_manager.py    # Groups alerts into incidents by source IP
   react_agent.py         # ReAct loop with three enrichment tools
-  report_generator.py    # Stage 1 + Stage 2 AI pipeline
+  report_generator.py    # Stage 1 + Stage 2 AI pipeline (orchestrator)
+  prompts.py             # LLM prompt templates and builders
+  rule_engine.py         # Deterministic derivations (CVSS, IOCs, MITRE override)
+  suggestions.py         # Hybrid rule-based + LLM suggestion pipeline
   report_db.py           # SQLite persistence
   web_server.py          # Flask + Socket.IO dashboard
   models.py              # Data classes
-  model_provider.py      # Ollama provider facade
-  evaluation/            # Standalone evaluation harness (not part of the app)
+  model_provider.py      # Ollama provider
+  evaluation/            # EVAL-ONLY: capstone evaluation harness, never imported by app
+                         #   Requires DVWA running at http://192.168.56.101:8080 (default creds)
+                         #   Entry point: python -m src.evaluation.run_evaluation
   tests/                 # Test suites
 lab/suricata/
   xss_alerts.rules       # 58 XSS detection rules (sids 1000001-1000058)

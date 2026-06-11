@@ -429,21 +429,26 @@ def _serialise_incident_summary(report: IncidentReport) -> Dict[str, Any]:
         "last_seen": s.last_seen,
         "source_ip": s.source_ip,
         "classification_counts": dict(s.classification_counts or {}),
+        # DUPLICATE of information_exposure.overall_cvss_estimate.
+        # CANONICAL copy is in information_exposure (required by template).
+        # This copy exists as an extra for dashboard convenience.
         "overall_cvss_estimate": float(s.overall_cvss_estimate or 0.0),
     }
 
 
 def _serialise_summary_description(report: IncidentReport) -> Dict[str, Any]:
     d = report.incident_summary_description
-    # attack_types_identified duplicates detected_attacks (template wants
-    # both - top-level for headline, here for narrative parity).
     return {
         "overview": d.overview or "",
+        # DUPLICATE of incident_summary.detected_attacks.
+        # CANONICAL copy is incident_summary.detected_attacks.
+        # Template requires both sections to carry the attack list.
         "attack_types_identified": list(report.incident_summary.detected_attacks or []),
         "attack_vectors": list(d.attack_vectors or []),
         "overall_attack_stage": d.overall_attack_stage or "",
-        # Note: template puts ai_suggestions under information_exposure_description,
-        # not here. We retain the internal copy as an extra for the dashboard.
+        # DUPLICATE of information_exposure_description.ai_suggestions.
+        # CANONICAL copy is information_exposure_description.ai_suggestions
+        # (required by template). This extra copy exists for dashboard sidebar.
         "ai_suggestions": list(d.ai_suggestions or []),
     }
 
@@ -498,11 +503,16 @@ def _serialise_information_exposure(report: IncidentReport) -> Dict[str, Any]:
         "exposure_detected": bool(e.exposure_detected),
         "exposure_types": list(e.exposure_types or []),
         "affected_systems": list(e.affected_systems or []),
-        # Template places overall_cvss_estimate here; we duplicate from summary.
+        # CANONICAL copy of overall_cvss_estimate (required by template here).
+        # Also appears as an extra in incident_summary for dashboard convenience.
         "overall_cvss_estimate": float(
             report.incident_summary.overall_cvss_estimate or 0.0,
         ),
-        # Internal copies retained as extras
+        # CANONICAL copies of data_sensitive_rating and indicators_of_compromise
+        # live in information_exposure_description (required by template).
+        # These extra copies are retained here so dashboard code reading
+        # information_exposure directly still gets both fields.
+        # When updating either field, update information_exposure_description too.
         "data_sensitive_rating": e.data_sensitive_rating,
         "indicators_of_compromise": list(e.indicators_of_compromise or []),
     }
@@ -528,10 +538,12 @@ def _serialise_exposure_description(report: IncidentReport) -> Dict[str, Any]:
     return {
         "exposure_summary": ed.exposure_summary or "",
         "impact_assessment": ed.impact_assessment or "",
-        # Template duplicates these from information_exposure.
+        # CANONICAL copies (required by template). Also appear as extras in
+        # information_exposure for backwards-compat; update both on schema changes.
         "data_sensitive_rating": ie.data_sensitive_rating or "unknown",
         "indicators_of_compromise": list(ie.indicators_of_compromise or []),
-        # Template duplicates ai_suggestions from incident_summary_description.
+        # CANONICAL copy of ai_suggestions (required by template here).
+        # Also appears as an extra in incident_summary_description; update both.
         "ai_suggestions": list(isd.ai_suggestions or []),
     }
 
@@ -564,17 +576,19 @@ def to_template_v1(report: IncidentReport) -> Dict[str, Any]:
         "information_exposure": _serialise_information_exposure(report),
         "alert_exposures": _serialise_alert_exposures(report),
         "information_exposure_description": _serialise_exposure_description(report),
-        # Generation metadata as a top-level extra (not in template).
+        # Generation metadata block - structured extra, not in template.
+        # DUPLICATE: model_used/provider_type/generation_status/generation_error
+        # also appear as flat top-level keys below for dashboard JS compatibility.
+        # CANONICAL source of truth is this block; the flat keys are read aliases.
+        # Update both locations if the field set changes.
         "_generation_metadata": {
             "model_used": report.model_used,
             "provider_type": report.provider_type,
             "generation_status": report.generation_status,
             "generation_error": report.generation_error,
         },
-        # Mirror generation metadata at the top level too. The dashboard JS
-        # reads model_used / provider_type from there; cheap to provide both
-        # locations rather than coupling the JS to the _generation_metadata
-        # block layout.
+        # DUPLICATE flat aliases of _generation_metadata fields.
+        # Dashboard JS reads these directly; kept to avoid a JS refactor.
         "model_used":         report.model_used,
         "provider_type":      report.provider_type,
         "generation_status":  report.generation_status,

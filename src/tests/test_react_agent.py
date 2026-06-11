@@ -39,7 +39,6 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from log_monitor import AlertRecord
-from model_provider import ModelProvider, ProviderType
 from models import AlertClassification, ReasoningStep
 from tool_registry import ToolDefinition, ToolRegistry
 from react_agent import (
@@ -79,8 +78,8 @@ def _section(title: str) -> None:
 # Fixtures
 # ---------------------------------------------------------------------------
 
-class MockProvider(ModelProvider):
-    """ModelProvider that replays a canned list of responses in order.
+class MockProvider:
+    """Replays a canned list of responses in order.
 
     Each entry can be a string (returned as-is) or an Exception instance
     (raised when .complete() is called). Useful for simulating LLM
@@ -133,10 +132,6 @@ class MockProvider(ModelProvider):
         if isinstance(item, Exception):
             raise item
         return str(item)
-
-    @property
-    def provider_type(self) -> ProviderType:
-        return ProviderType.OLLAMA
 
     @property
     def model_name(self) -> str:
@@ -776,33 +771,6 @@ def test_enrichment_cache_disabled_with_ttl_zero() -> None:
                         f"ttl=0 -> never cached for {s.action}", s.thought)
 
 
-def test_enrichment_cache_size_eviction() -> None:
-    _section("enrichment cache: oldest entries evicted at size cap")
-
-    provider = MockProvider([_final_answer_xml() for _ in range(10)])
-    agent = ReActAgent(
-        provider, _registry_with_all_three_enrichment_tools(),
-        max_iterations=3, auto_enrichment=True,
-        enrichment_cache_ttl_seconds=60.0,
-    )
-    # Shrink cap so we can trigger eviction with a few entries
-    agent._ENRICHMENT_CACHE_MAX_SIZE = 4
-
-    # Fire alerts with many different src_ips so each generates new cache keys
-    for i in range(8):
-        agent.classify(_make_alert(
-            src_ip=f"10.0.0.{i}",
-            signature="some unrecognised signature",  # attack_type=Other,
-        ))
-
-    # After 8 alerts with 2 cache keys each (history+env, since attack_type=Other
-    # means no stats call), we wrote 16 entries with cap=4. Each insert past 4
-    # triggers eviction of oldest half (down to 2), then we refill.
-    # Final cache size should never exceed cap.
-    cache_size = len(agent._enrichment_cache)
-    _assert(cache_size <= agent._ENRICHMENT_CACHE_MAX_SIZE,
-            f"cache stayed within cap (size={cache_size}, cap={agent._ENRICHMENT_CACHE_MAX_SIZE})")
-
 
 def test_enrichment_cache_per_attack_type_separate() -> None:
     _section("enrichment cache: different attack_types cache separately")
@@ -867,10 +835,9 @@ def main() -> int:
         test_auto_enrichment_off_no_system_steps,
         test_auto_enrichment_skips_unregistered_tools,
         test_auto_enrichment_results_visible_to_llm,
-        # Enrichment cache (P2a)
+        # Enrichment cache
         test_enrichment_cache_hit_marks_thought_as_cached,
         test_enrichment_cache_disabled_with_ttl_zero,
-        test_enrichment_cache_size_eviction,
         test_enrichment_cache_per_attack_type_separate,
     ]
 

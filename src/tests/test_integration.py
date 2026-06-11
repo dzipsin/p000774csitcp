@@ -32,7 +32,6 @@ from log_monitor import AlertRecord
 from incident_manager import IncidentManager
 from report_generator import ReportGenerator
 from report_db import ReportDatabase
-from model_provider import ModelProvider, ProviderType
 
 
 logging.basicConfig(
@@ -42,10 +41,8 @@ logging.basicConfig(
 )
 
 
-class FakeProvider(ModelProvider):
+class FakeProvider:
     """Returns fixed valid JSON for both stages."""
-    @property
-    def provider_type(self): return ProviderType.OLLAMA
     @property
     def model_name(self): return "test-fake"
 
@@ -384,7 +381,7 @@ def test_repeat_offender_flag():
 # Test 6: ReActAgent integration through the full pipeline
 # ============================================================================
 
-class _ReActMockProvider(ModelProvider):
+class _ReActMockProvider:
     """Replays canned XML responses. Sufficient for the ReAct loop.
 
     complete_json() also delegates to the same response pool so that the
@@ -407,10 +404,6 @@ class _ReActMockProvider(ModelProvider):
 
     def complete_json(self, prompt: str, system_prompt=None) -> str:
         return self._next()
-
-    @property
-    def provider_type(self):
-        return ProviderType.OLLAMA
 
     @property
     def model_name(self):

@@ -27,7 +27,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from log_monitor import AlertRecord
 from incident_manager import IncidentManager
 from report_generator import ReportGenerator
-from model_provider import ModelProvider, ProviderType
 from evaluation.attack_runner import FireResult
 from evaluation.result_collector import (
     ScenarioResult, compute_metrics, confusion_matrix, correlate,
@@ -45,7 +44,7 @@ logging.basicConfig(
 # Mock LLM that classifies based on scenario eval_id embedded in the URL
 # ============================================================================
 
-class ScenarioAwareProvider(ModelProvider):
+class ScenarioAwareProvider:
     """Returns classifications appropriate to whatever eval_id it sees in the prompt.
 
     This simulates an LLM that always gets the classification right, so we can
@@ -53,8 +52,6 @@ class ScenarioAwareProvider(ModelProvider):
     about LLM correctness.
     """
 
-    @property
-    def provider_type(self): return ProviderType.OLLAMA
     @property
     def model_name(self): return "test-scenario-aware"
 

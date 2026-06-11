@@ -20,13 +20,14 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
 from log_monitor import LogMonitor
 from web_server import Server
-from model_provider import ModelConfig, ProviderType, create_provider
+from model_provider import ModelConfig, ModelProvider, ProviderType, create_provider
 from incident_manager import IncidentManager
 from report_generator import ReportGenerator
 from report_db import ReportDatabase
@@ -87,6 +88,42 @@ POLL_INTERVAL = float(_get("monitor", "poll_interval", 0.5))
 
 
 # ---------------------------------------------------------------------------
+# Suricata process check (Linux only)
+# ---------------------------------------------------------------------------
+
+REQUIRE_SURICATA      = bool(_get("suricata", "require_running", True))
+SURICATA_PROCESS_NAME = str(_get("suricata", "process_name", "suricata"))
+
+
+def _check_suricata_running(process_name: str) -> None:
+    """ Ensure the Suricata IDS process is running before startup.
+        Calls sys.exit(1) if Suricata isn't found. """
+    if not sys.platform.startswith("linux"):
+        log.info("Suricata check skipped (platform '%s' is not Linux)", sys.platform)
+        return
+
+    try:
+        result = subprocess.run(
+            ["pgrep", "-fi", process_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        log.warning("Cannot verify Suricata: 'pgrep' not found on PATH - skipping check")
+        return
+
+    if result.returncode != 0:
+        log.error("Suricata process '%s' is not running", process_name)
+        sys.exit(1)
+
+    log.info("Suricata process '%s' is running", process_name)
+
+
+if REQUIRE_SURICATA:
+    _check_suricata_running(SURICATA_PROCESS_NAME)
+
+
+# ---------------------------------------------------------------------------
 # Incident pipeline config
 # ---------------------------------------------------------------------------
 
@@ -124,7 +161,6 @@ AGENT_MODE              = str(_agent_cfg.get("mode", "single_shot")).lower()
 AGENT_MAX_ITERATIONS    = int(_agent_cfg.get("max_iterations", 3))
 AGENT_TOOL_TIMEOUT      = float(_agent_cfg.get("tool_timeout_seconds", 5.0))
 AGENT_TOTAL_BUDGET      = float(_agent_cfg.get("total_budget_seconds", 30.0))
-AGENT_TRACE_ENABLED     = bool(_agent_cfg.get("reasoning_trace_enabled", True))
 AGENT_AUTO_ENRICHMENT   = bool(_agent_cfg.get("auto_enrichment", True))
 
 _agent_tools_cfg        = _agent_cfg.get("tools", {})
@@ -147,17 +183,11 @@ if AGENT_MODE not in ("single_shot", "react"):
 # Model config
 # ---------------------------------------------------------------------------
 
-_model_cfg     = _cfg.get("model", {})
-_provider_name = _model_cfg.get("provider", "ollama").lower()
-
-try:
-    _provider_type = ProviderType(_provider_name)
-except ValueError:
-    log.error("Unknown provider '%s' in config", _provider_name)
-    sys.exit(1)
-
-_provider_cfg = _model_cfg.get(_provider_name, {})
-_model_name   = _provider_cfg.get("model_name", "")
+_model_cfg      = _cfg.get("model", {})
+_provider_str   = _model_cfg.get("provider", ProviderType.OLLAMA.value)
+_provider_type  = ProviderType(_provider_str)
+_provider_cfg   = _model_cfg.get(_provider_str, {})
+_model_name     = _provider_cfg.get("model_name", "")
 
 model_config = ModelConfig(
     provider        = _provider_type,
