@@ -251,21 +251,31 @@ def test_repeat_offender() -> None:
     print("\n=== Test 6: Repeat offender flag ===")
     _reset()
 
+    # per_attack_type so two different attack types from the same IP open two
+    # separate incidents in-process, with no window/timing dependence.
     mgr = IncidentManager(
-        grouping_mode="per_actor",
+        grouping_mode="per_attack_type",
         time_window_minutes=1.0,
         debounce_seconds=0.5,
         on_regenerate=_record_regen,
     )
     mgr.start()
 
+    # First incident for this IP (SQLi) -> NOT a repeat offender yet.
     mgr.process_alert(_make_alert("10.0.0.77"))
+    assert mgr.is_repeat_offender("10.0.0.77") is False
+    assert mgr.is_repeat_offender("10.0.0.88") is False
 
+    # Second incident for the SAME IP (XSS) -> now a repeat offender.
+    mgr.process_alert(_make_alert(
+        "10.0.0.77",
+        signature="ET WEB_SERVER Cross Site Scripting (XSS) Attempt",
+    ))
     assert mgr.is_repeat_offender("10.0.0.77") is True
     assert mgr.is_repeat_offender("10.0.0.88") is False
 
     mgr.stop(close_open=True)
-    print("    PASS: repeat offender correctly tracked")
+    print("    PASS: flag flips on the second incident, not the first")
 
 
 def test_debounce_coalesces_bursts() -> None:
@@ -440,6 +450,39 @@ def test_force_regenerate_includes_recently_closed() -> None:
           f"(count={count})")
 
 
+def test_clear_all_incidents() -> None:
+    print("\n=== Test 12: clear_all_incidents bombs in-memory state ===")
+    _reset()
+
+    mgr = IncidentManager(
+        grouping_mode="per_attack_type",
+        time_window_minutes=10.0,
+        debounce_seconds=999.0,      # keep timers pending so we can prove cancellation
+        sweep_interval_seconds=999.0,
+        on_regenerate=_record_regen,
+    )
+    mgr.start()
+
+    # Two incidents from the same IP (SQLi + XSS) -> repeat offender flagged.
+    mgr.process_alert(_make_alert("10.0.0.50"))
+    mgr.process_alert(_make_alert(
+        "10.0.0.50", signature="ET WEB_SERVER Cross Site Scripting (XSS) Attempt",
+    ))
+    assert len(mgr.get_open_incidents()) == 2
+    assert mgr.is_repeat_offender("10.0.0.50") is True
+
+    dropped = mgr.clear_all_incidents()
+    assert dropped == 2, f"expected 2 dropped, got {dropped}"
+    assert len(mgr.get_open_incidents()) == 0, "open incidents not cleared"
+    assert len(mgr.get_all_incidents()) == 0, "recently-closed not cleared"
+    assert mgr.is_repeat_offender("10.0.0.50") is False, "repeat counter not reset"
+    assert len(mgr._debounce_timers) == 0, "debounce timers not cancelled"
+    assert len(mgr._regen_executors) == 0, "regen executors not shut down"
+
+    mgr.stop(close_open=True)
+    print("    PASS: open/recently-closed/counter/timers/executors all wiped")
+
+
 # ============================================================================
 # Runner
 # ============================================================================
@@ -457,6 +500,7 @@ def main() -> int:
         test_shutdown_closes_open_incidents,
         test_incident_object_api,
         test_force_regenerate_includes_recently_closed,
+        test_clear_all_incidents,
     ]
 
     failed = []

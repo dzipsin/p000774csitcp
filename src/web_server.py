@@ -87,6 +87,9 @@ class Server:
         # Optional integrations
         self._incident_force_regenerate: Optional[Callable[[], int]] = None
         self._incident_clear_all: Optional[Callable[[], int]] = None
+        # Drops the IncidentManager's in-memory incident state so a cleared
+        # incident isn't regenerated back onto disk by a pending debounce/sweep.
+        self._incident_reset: Optional[Callable[[], int]] = None
         # Phase 10: query-capable storage backend (ReportDatabase). Endpoints
         # that require SQLite-only methods (list_by_*, aggregate_stats) check
         # `hasattr` before calling, so a JSON-backed deployment still works
@@ -112,6 +115,10 @@ class Server:
     def set_incident_clear_all(self, fn: Callable[[], int]) -> None:
         """Attach a callable that clears incident storage (on-disk reports)."""
         self._incident_clear_all = fn
+
+    def set_incident_reset(self, fn: Callable[[], int]) -> None:
+        """Attach IncidentManager.clear_all_incidents - drops in-memory state."""
+        self._incident_reset = fn
 
     def set_storage(self, storage: Any) -> None:
         """Attach the storage backend. When it exposes the Phase 10 query
@@ -297,11 +304,29 @@ class Server:
 
         @app.route("/api/incidents/clear", methods=["POST"])
         def api_clear_incidents():
-            """Clear cached incidents from memory AND delete on-disk reports."""
+            """Clear incidents everywhere - completely bomb them.
+
+            Order matters:
+              1. Drop the IncidentManager's in-memory incidents (and cancel
+                 pending debounce/sweep + regen executors) so nothing
+                 regenerates a row back onto disk after we delete it.
+              2. Clear the web-server snapshot cache served to clients.
+              3. Delete every incident + cascaded alert from SQLite.
+            """
+            # 1. IncidentManager in-memory state.
+            manager_dropped = 0
+            if self._incident_reset is not None:
+                try:
+                    manager_dropped = self._incident_reset()
+                except Exception:
+                    log.exception("IncidentManager reset failed")
+
+            # 2. Web-server snapshot cache.
             with self._incidents_lock:
                 mem_count = len(self._incidents)
                 self._incidents.clear()
 
+            # 3. On-disk SQLite rows (incidents + alerts via FK cascade).
             disk_count = 0
             if self._incident_clear_all is not None:
                 try:
@@ -314,9 +339,14 @@ class Server:
             except Exception:
                 log.exception("Failed to emit incidents_cleared event")
 
+            log.info(
+                "Clear incidents: manager_dropped=%d, cache=%d, disk=%d",
+                manager_dropped, mem_count, disk_count,
+            )
             return jsonify({
                 "cleared_memory": mem_count,
                 "cleared_disk": disk_count,
+                "manager_dropped": manager_dropped,
             })
 
         # ------------------------------------------------------------------

@@ -104,8 +104,13 @@ class IncidentManager:
         # queues any follow-up submitted while one is already running.
         self._regen_executors: Dict[str, ThreadPoolExecutor] = {}
 
-        # Source IPs seen in the current session. Used for repeat_offender flag.
-        self._seen_source_ips: set[str] = set()
+        # Number of distinct incidents we've opened for each source IP this
+        # session. Drives the repeat_offender flag: an IP becomes a repeat
+        # offender only once it's involved in a SECOND incident (count > 1).
+        # A plain "have we seen this IP" set was wrong - the IP lands in it on
+        # the very first alert, so every incident (including the first) got
+        # flagged. Counting incidents-per-IP instead fixes that.
+        self._incident_count_by_ip: Dict[str, int] = {}
 
         # Recently-closed incidents, kept briefly so final-regeneration workers
         # can still find them by ID. Keyed by incident_id.
@@ -225,7 +230,6 @@ class IncidentManager:
 
             # Append the alert
             incident.add_alert(alert, arrival_time)
-            self._seen_source_ips.add(src_ip)
 
             log.debug(
                 "Alert added to incident %s (src=%s, sig=%s, count=%d)",
@@ -280,11 +284,64 @@ class IncidentManager:
     def is_repeat_offender(self, source_ip: str) -> bool:
         """Whether this source IP has been seen before in this session.
 
-        An IP is a "repeat offender" if we've seen it in an earlier incident.
-        We check this at report-generation time, not grouping time.
+        An IP is a "repeat offender" if it has been the source of more than
+        one incident this session, i.e. we've already opened an earlier
+        incident for it. Checked at report-generation time, not grouping time.
+
+        The first incident from an IP returns False (count == 1); the second
+        and later incidents return True (count >= 2).
         """
         with self._lock:
-            return source_ip in self._seen_source_ips
+            count = self._incident_count_by_ip.get(source_ip, 0)
+            verdict = count > 1
+            log.debug(
+                "is_repeat_offender(%s) -> %s (session_incident_count=%d)",
+                source_ip, verdict, count,
+            )
+            return verdict
+
+    def clear_all_incidents(self) -> int:
+        """Drop ALL in-memory incident state for the current session.
+
+        Cancels every pending debounce timer, shuts down the per-incident
+        regeneration executors, forgets all open and recently-closed
+        incidents, and resets the repeat-offender counter. Backs the dashboard
+        "Clear Incidents" action: without this, a debounce timer or the
+        sweeper would regenerate a just-cleared incident straight back onto
+        disk.
+
+        Returns the number of incidents (open + recently-closed) dropped.
+        """
+        with self._lock:
+            # Cancel pending debounce timers so nothing regenerates.
+            for timer in self._debounce_timers.values():
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
+            self._debounce_timers.clear()
+
+            # Shut down the per-incident regen executors. wait=False: a job may
+            # be mid-flight (already past the lock) - we just stop accepting and
+            # queuing new ones.
+            for ex in self._regen_executors.values():
+                try:
+                    ex.shutdown(wait=False)
+                except Exception:
+                    pass
+            self._regen_executors.clear()
+
+            dropped = len(self._open_incidents) + len(self._recently_closed)
+
+            self._open_incidents.clear()
+            self._recently_closed.clear()
+            self._incident_count_by_ip.clear()
+
+        log.info(
+            "Cleared all in-memory incident state (%d incident(s) dropped)",
+            dropped,
+        )
+        return dropped
 
     def get_alerts_for_ip(
         self,
@@ -385,9 +442,17 @@ class IncidentManager:
         )
         self._open_incidents[group_key] = incident
 
+        # Track how many incidents this IP has been the source of. The second
+        # incident (count == 2) is what flips the repeat_offender flag.
+        self._incident_count_by_ip[src_ip] = (
+            self._incident_count_by_ip.get(src_ip, 0) + 1
+        )
+
         log.info(
-            "Incident %s opened (src=%s, attack_type=%s, mode=%s)",
+            "Incident %s opened (src=%s, attack_type=%s, mode=%s, "
+            "session_incident_count_for_ip=%d)",
             incident.incident_id, src_ip, attack_type or "-", self.grouping_mode,
+            self._incident_count_by_ip[src_ip],
         )
         return incident
 
