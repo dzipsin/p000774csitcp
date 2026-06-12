@@ -222,8 +222,8 @@ src/
                          #   Entry point: python -m src.evaluation.run_evaluation
   tests/                 # Test suites
 lab/suricata/
-  xss_alerts.rules       # 58 XSS detection rules (sids 1000001-1000058)
-  sqli_alerts.rules      # 13 SQLi detection rules (sids 1000101-1000113)
+  xss_alerts.rules       # 58 XSS detection rules (sids 1002001-1002058)
+  sqli_alerts.rules      # 13 SQLi detection rules (sids 1001001-1001013)
   README.md              # Rule reference and deployment guide
 docs/
   ARCHITECTURE.md        # System design, component walkthrough, storage reference
