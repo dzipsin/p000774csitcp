@@ -310,8 +310,8 @@ class IncidentReport:
 # These map deterministically to attack types regardless of msg wording,
 # which avoids substring-match misses on signatures like
 # "P2 - SQL Comment Sequence in URI" (no "SQLI" / "SQL INJECTION" token).
-_CUSTOM_XSS_SID_RANGE = range(1000001, 1000059)    # xss_alerts.rules: 1000001-1000058
-_CUSTOM_SQLI_SID_RANGE = range(1000101, 1000114)   # sqli_alerts.rules: 1000101-1000113
+_CUSTOM_XSS_SID_RANGE = range(1002001, 1002059)    # xss_alerts.rules: 1002001-1002058
+_CUSTOM_SQLI_SID_RANGE = range(1001001, 1001014)   # sqli_alerts.rules: 1001001-1001013
 
 
 def extract_attack_type(signature: str, signature_id: Optional[int] = None) -> str:
