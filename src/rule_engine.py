@@ -574,13 +574,27 @@ def _summarise_enrichment(classifications: List[AlertClassification]) -> str:
             pass
 
         if step.action == "get_alert_history" and isinstance(decoded_obs, dict):
-            lines.append(
-                f"- prior activity: {decoded_obs.get('total_prior_alerts', 0)} "
-                f"alert(s) in last {decoded_obs.get('lookback_hours', 24)}h, "
-                f"attack types {decoded_obs.get('attack_types_seen', [])}, "
-                f"repeat offender this session = "
-                f"{decoded_obs.get('is_repeat_offender_this_session', False)}"
-            )
+            # Flag-led + honest: total_prior_alerts counts every alert from this
+            # IP in the window INCLUDING the current incident's own alerts. When
+            # the IP isn't a repeat offender this session there is exactly one
+            # incident, so those alerts are all current - say so, otherwise the
+            # model parrots "prior activity" and invents history that isn't there.
+            ro = bool(decoded_obs.get("is_repeat_offender_this_session", False))
+            n = decoded_obs.get("total_prior_alerts", 0)
+            hrs = decoded_obs.get("lookback_hours", 24)
+            types = decoded_obs.get("attack_types_seen", [])
+            if ro:
+                lines.append(
+                    f"- source IP history: REPEAT OFFENDER this session - {n} "
+                    f"alert(s) in last {hrs}h spanning earlier and current "
+                    f"incidents, attack types {types}"
+                )
+            else:
+                lines.append(
+                    f"- source IP history: not a repeat offender - the {n} "
+                    f"alert(s) in last {hrs}h are all from THIS incident, no "
+                    f"earlier incidents; attack types {types}"
+                )
         elif step.action == "lookup_environment_context" and isinstance(decoded_obs, dict):
             if decoded_obs.get("match_found"):
                 lines.append(
