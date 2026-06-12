@@ -264,7 +264,11 @@ function renderAllIncidents() {
     else if (s.incident_status === 'closed') closed++;
     const cc = s.classification_counts || {};
     tpTotal += Number(cc.true_positive || 0);
-    fpTotal += Number(cc.false_positive || 0);
+    // Serializer key is `likely_false_positive` (matches the classification
+    // enum); tolerate the legacy `false_positive` shape too. This must match
+    // the per-report card (renderIncidentCard) or the top counter disagrees
+    // with the report body.
+    fpTotal += Number(cc.likely_false_positive ?? cc.false_positive ?? 0);
   }
   incStatEls.total.textContent  = all.length;
   incStatEls.open.textContent   = open;
