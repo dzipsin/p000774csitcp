@@ -251,7 +251,36 @@ def test_history_in_memory_only() -> None:
     _assert(out["prior_incident_count"] == 1, "one incident", str(out["prior_incident_count"]))
     _assert(out["first_seen_iso"] is not None, "first_seen recorded")
     _assert(out["last_seen_iso"] is not None, "last_seen recorded")
-    _assert(out["is_repeat_offender_this_session"] is True, "marked repeat offender")
+    # A single incident is NOT a repeat offender - the flag only flips once a
+    # second incident opens for the same IP (see test_history_repeat_offender).
+    _assert(out["is_repeat_offender_this_session"] is False, "single incident is not repeat")
+
+
+def test_history_repeat_offender() -> None:
+    _section("get_alert_history: repeat offender flips on second incident")
+
+    # per_attack_type so two attack types from the same IP open two incidents
+    # without any timing/window dependence.
+    mgr = IncidentManager(
+        grouping_mode="per_attack_type",
+        time_window_minutes=10.0,
+        debounce_seconds=999.0,
+        sweep_interval_seconds=999.0,
+        on_regenerate=lambda _: None,
+    )
+    storage = _FakeStorage([])
+    tool = make_alert_history_tool(mgr, storage)
+
+    # First incident (SQLi) -> not yet a repeat offender.
+    mgr.process_alert(_make_alert("10.0.0.9", signature="SQL Injection Attempt"))
+    out1 = tool.call({"src_ip": "10.0.0.9"}).output
+    _assert(out1["is_repeat_offender_this_session"] is False, "first incident not repeat")
+
+    # Second incident, same IP (XSS) -> now a repeat offender.
+    mgr.process_alert(_make_alert("10.0.0.9", signature="XSS Cross Site Scripting"))
+    out2 = tool.call({"src_ip": "10.0.0.9"}).output
+    _assert(out2["prior_incident_count"] == 2, "two incidents", str(out2["prior_incident_count"]))
+    _assert(out2["is_repeat_offender_this_session"] is True, "second incident marks repeat")
 
 
 def test_history_disk_only() -> None:
@@ -929,6 +958,7 @@ def main() -> int:
         test_get_all_incidents,
         test_history_empty_returns_zero_defaults,
         test_history_in_memory_only,
+        test_history_repeat_offender,
         test_history_disk_only,
         test_history_combined_dedupe_by_incident_id,
         test_history_time_filter_excludes_old_alerts,

@@ -501,10 +501,14 @@ def test_empty_incident():
     assert incident.alert_count == 0
 
     report = gen.generate(incident)
+    # A 0-alert incident is a degenerate case - generate() routes it through
+    # _build_error_report (status "error"), not a normal "complete" report.
+    # (See commit "Remove _build_empty_report, merge into _build_error_report".)
     assert report.incident_summary.total_alerts == 0
-    assert report.generation_status == "complete"
+    assert report.generation_status == "error"
+    assert report.generation_error == "Incident has no alerts"
     assert len(report.alert_analyses) == 0
-    print("    PASS: empty incident produced empty report, no crash")
+    print("    PASS: empty incident produced an error report, no crash")
 
 
 def test_storage_save_is_durable():
@@ -1032,9 +1036,20 @@ def test_rule_based_suggestions_internal_docker_fp_cluster():
     cls.severity = "low"
     cls.recommendation = "continue_monitoring"
     incident = _make_incident([alert, alert, alert])  # 3 alerts, all FP
+    # The internal subnet is config-driven (lab IPs were de-hardcoded): the
+    # suggestion interpolates the CIDR from a match_type=="cidr" env entry,
+    # falling back to a generic phrase when none is supplied.
+    env_entries = [{
+        "pattern": "172.18.0.0/16",
+        "match_type": "cidr",
+        "role": "internal_lab_network",
+        "classification_hint": "likely_false_positive_if_internal_only",
+        "description": "Docker lab subnet",
+    }]
     sugg = _generate_rule_based_suggestions(
         incident=incident, classifications=[cls, cls, cls],
         detected_attacks=["Reconnaissance"], tp_count=0, fp_count=3,
+        env_entries=env_entries,
     )
     joined = " | ".join(sugg)
     assert "Tune Suricata" in joined, f"missing Suricata tuning: {joined}"
@@ -1217,13 +1232,24 @@ def test_rule_based_suggestions_work_in_single_shot_mode():
     cls.severity = "low"
     incident = _make_incident([alert, alert, alert], source_ip="172.18.0.2")  # 3 alerts, all FP
 
-    env_entries = [{
-        "pattern": "172.18.0.2",
-        "match_type": "exact_ip",
-        "role": "internal_database",
-        "classification_hint": "likely_false_positive_if_internal_only",
-        "description": "internal db",
-    }]
+    env_entries = [
+        {
+            "pattern": "172.18.0.2",
+            "match_type": "exact_ip",
+            "role": "internal_database",
+            "classification_hint": "likely_false_positive_if_internal_only",
+            "description": "internal db",
+        },
+        {
+            # CIDR entry drives the subnet interpolated into the tuning hint
+            # (lab IPs are config-driven, no longer hardcoded).
+            "pattern": "172.18.0.0/16",
+            "match_type": "cidr",
+            "role": "internal_lab_network",
+            "classification_hint": "likely_false_positive_if_internal_only",
+            "description": "Docker lab subnet",
+        },
+    ]
     sugg = _generate_rule_based_suggestions(
         incident=incident,
         classifications=[cls, cls, cls],

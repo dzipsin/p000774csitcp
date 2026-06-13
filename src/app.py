@@ -328,6 +328,9 @@ try:
     # Hook up the force-regenerate endpoint
     server.set_incident_force_regenerate(incident_manager.force_regenerate_all)
     server.set_incident_clear_all(storage.clear_all)
+    # Clearing must also drop the manager's in-memory incidents, else a
+    # pending debounce/sweep regenerates a cleared incident back onto disk.
+    server.set_incident_reset(incident_manager.clear_all_incidents)
 
     # Phase 10: attach the storage backend so the Server can serve the
     # history-query endpoints (/api/incidents/by-ip, /by-attack, /stats).

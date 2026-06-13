@@ -100,7 +100,8 @@ alert count, environment role, observed payload).
 
 GOOD examples:
   - "Block 198.51.100.1 at the WAF - repeat offender with 14 prior SQLi
-     alerts in last 24h."
+     alerts in last 24h."   (only valid when "Repeat offender this
+     session" is true - see the REPEAT-OFFENDER RULE below)
   - "Investigate session tokens issued to /app/login
      between 17:38 and 17:39 UTC - reflected XSS payload may have stolen
      them."
@@ -120,6 +121,13 @@ these): "implement additional", "review and update", "enhance
 monitoring", "consider implementing", "consider using", "educate
 developers", "regularly update", "implement input validation",
 "implement a web application firewall".
+
+REPEAT-OFFENDER RULE: Only call the source IP a "repeat offender", or cite
+"prior" / "previous" / "earlier" alerts or incidents, when "Repeat offender
+this session" in the INCIDENT DATA below is true. If it is false, do NOT use
+the phrase "repeat offender" and do NOT claim any alert history beyond the
+alerts in THIS incident - the alert count shown is for this incident only,
+not prior activity.
 
 For "overall_attack_stage", choose one of: Reconnaissance, Resource Development,
 Initial Access, Execution, Persistence, Privilege Escalation, Defense Evasion,
