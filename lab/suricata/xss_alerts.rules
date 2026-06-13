@@ -42,7 +42,7 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie
 
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Cookie Theft via window.location in Header"; content:"document.cookie"; http_header; nocase; content:"window.location"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1002011; rev:1;)
 
-# <script + document.cookie 
+# <script + document.cookie
 
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS Script Tag with document.cookie in POST Body"; content:"<script"; http_client_body; nocase; content:"document.cookie"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1002012; rev:1;)
 
@@ -110,7 +110,7 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS String
 
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS String.fromCharCode Obfuscation with Cookie Access in Header"; content:"String.fromCharCode("; http_header; nocase; content:"document.cookie"; http_header; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1002036; rev:1;)
 
-# atob() + document.cookie 
+# atob() + document.cookie
 
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS atob() Base64 Decode with Cookie Access in POST Body"; content:"atob("; http_client_body; nocase; content:"document.cookie"; http_client_body; nocase; flow:to_server,established; classtype:web-application-attack; priority:1; sid:1002037; rev:1;)
 
@@ -124,7 +124,7 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P1 - XSS atob()
 # Clear injection structure - shows intent but exfiltration  not confirmed
 # -------------------------------------------------------------------------
 
-# Encoded 'script' tag 
+# Encoded 'script' tag
 
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS $HTTP_PORTS (msg: "P2 - XSS Raw or URL-Encoded 'script' Tag in URI"; pcre:"/(%3C|<)(s|%73)(c|%63)(r|%72)(i|%69)(p|%70)(t|%74)/iU"; flow:to_server,established; classtype:web-application-attack; priority:2; sid:1002040; rev:1;)
 

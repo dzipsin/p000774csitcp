@@ -1,0 +1,20 @@
+services:
+  dvwa:
+    image: ghcr.io/digininja/dvwa:latest
+    ports:
+      - "8080:80"
+    environment:
+      - DB_SERVER=db
+      - DEFAULT_SECURITY_LEVEL=low
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  db:
+    image: mariadb:10.11
+    environment:
+      MYSQL_ROOT_PASSWORD: dvwa
+      MYSQL_DATABASE: dvwa
+      MYSQL_USER: dvwa
+      MYSQL_PASSWORD: p@ssw0rd
+    restart: unless-stopped
