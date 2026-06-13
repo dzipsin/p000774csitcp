@@ -1,0 +1,688 @@
+"""
+incident_manager.py - Groups alerts into incidents and manages lifecycle.
+
+Responsibilities:
+  - Group incoming AlertRecords into Incidents based on grouping_mode
+  - Track open vs closed incidents via a sliding time window
+  - Debounce regeneration requests (avoid thrashing when alerts arrive in bursts)
+  - Maintain in-session repeat-offender tracking
+  - Fire a regeneration callback when debounce timer expires
+
+Threading model:
+  - Public methods are safe to call from any thread (guarded by self._lock)
+  - One background "sweeper" thread closes incidents whose time window expired
+  - Per-incident debounce timers run on their own threading.Timer threads
+  - The regeneration callback runs on a per-incident ThreadPoolExecutor
+    (max_workers=1), which serialises jobs and queues follow-ups automatically
+
+Depends on:
+  log_monitor.AlertRecord
+  models.Incident
+  models.extract_attack_type
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from log_monitor import AlertRecord
+from models import Incident, extract_attack_type
+
+log = logging.getLogger(__name__)
+
+
+# Type alias for the regeneration callback: receives an Incident snapshot.
+# Implementations should be idempotent - this callback may be invoked multiple
+# times for the same incident as alerts continue to arrive. Return value is
+# ignored by the manager, so we accept Any (covers both None and IncidentReport).
+RegenerateCallback = Callable[[Incident], Any]
+
+
+class IncidentManager:
+    """Groups alerts into incidents and triggers report regeneration.
+
+    Usage::
+
+        manager = IncidentManager(
+            grouping_mode="per_actor",
+            time_window_minutes=2.0,
+            debounce_seconds=3.0,
+            on_regenerate=lambda inc: report_generator.generate(inc),
+        )
+        manager.start()
+        log_monitor.subscribe(manager.process_alert)
+        # ... later ...
+        manager.stop()
+    """
+
+    # Alerts with these source IPs are dropped - they provide no grouping value
+    _INVALID_SOURCE_IPS = {"", "?", "0.0.0.0", "::"}
+
+    def __init__(
+        self,
+        grouping_mode: str = "per_actor",
+        time_window_minutes: float = 2.0,
+        debounce_seconds: float = 3.0,
+        sweep_interval_seconds: float = 10.0,
+        on_regenerate: Optional[RegenerateCallback] = None,
+    ):
+        """
+        Args:
+            grouping_mode: "per_actor" or "per_attack_type"
+            time_window_minutes: incident closes after this many minutes of silence
+            debounce_seconds: wait this long after last alert before regenerating
+            sweep_interval_seconds: how often the background sweeper checks for expired incidents
+            on_regenerate: callback invoked with an Incident when regeneration should happen
+        """
+        if grouping_mode not in ("per_actor", "per_attack_type"):
+            raise ValueError(
+                f"Invalid grouping_mode '{grouping_mode}'. "
+                "Must be 'per_actor' or 'per_attack_type'."
+            )
+
+        self.grouping_mode = grouping_mode
+        self.time_window_seconds = float(time_window_minutes) * 60.0
+        self.debounce_seconds = float(debounce_seconds)
+        self.sweep_interval_seconds = float(sweep_interval_seconds)
+        self._on_regenerate = on_regenerate
+
+        # Open incidents, keyed by group key (str). One entry per currently-open
+        # incident. Closed incidents are removed from this dict (they're persisted
+        # to disk by the report generator).
+        self._open_incidents: Dict[str, Incident] = {}
+
+        # Debounce timers, keyed by incident_id.
+        self._debounce_timers: Dict[str, threading.Timer] = {}
+
+        # Per-incident single-threaded executors. max_workers=1 ensures
+        # regenerations for the same incident run one at a time; the executor
+        # queues any follow-up submitted while one is already running.
+        self._regen_executors: Dict[str, ThreadPoolExecutor] = {}
+
+        # Number of distinct incidents we've opened for each source IP this
+        # session. Drives the repeat_offender flag: an IP becomes a repeat
+        # offender only once it's involved in a SECOND incident (count > 1).
+        # A plain "have we seen this IP" set was wrong - the IP lands in it on
+        # the very first alert, so every incident (including the first) got
+        # flagged. Counting incidents-per-IP instead fixes that.
+        self._incident_count_by_ip: Dict[str, int] = {}
+
+        # Recently-closed incidents, kept briefly so final-regeneration workers
+        # can still find them by ID. Keyed by incident_id.
+        # Entries are evicted by the sweeper to keep this bounded.
+        self._recently_closed: Dict[str, Incident] = {}
+
+        # Thread-safety
+        self._lock = threading.RLock()  # Reentrant because some methods call others
+
+        # Sweeper control
+        self._stop_event = threading.Event()
+        self._sweeper_thread: Optional[threading.Thread] = None
+
+        log.info(
+            "IncidentManager init: mode=%s, window=%.1fs, debounce=%.1fs",
+            grouping_mode, self.time_window_seconds, self.debounce_seconds,
+        )
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        """Start the background sweeper thread."""
+        with self._lock:
+            if self._sweeper_thread and self._sweeper_thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._sweeper_thread = threading.Thread(
+                target=self._sweep_loop, daemon=True, name="incident-sweeper"
+            )
+            self._sweeper_thread.start()
+        log.info("IncidentManager started")
+
+    def stop(self, close_open: bool = True) -> None:
+        """Stop the manager and optionally close all open incidents.
+
+        Args:
+            close_open: if True, mark all open incidents as closed and fire
+                        one final regeneration for each. Recommended during
+                        graceful shutdown.
+        """
+        log.info("IncidentManager stopping (close_open=%s)", close_open)
+        self._stop_event.set()
+
+        # Cancel all debounce timers
+        with self._lock:
+            for timer in list(self._debounce_timers.values()):
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
+            self._debounce_timers.clear()
+
+        # Close any open incidents with final regeneration
+        if close_open:
+            self._close_all_open_incidents(final=True)
+
+        # Wait for sweeper to exit
+        if self._sweeper_thread and self._sweeper_thread.is_alive():
+            self._sweeper_thread.join(timeout=2.0)
+
+        log.info("IncidentManager stopped")
+
+    def set_regenerate_callback(self, cb: RegenerateCallback) -> None:
+        """Install or replace the regeneration callback."""
+        with self._lock:
+            self._on_regenerate = cb
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def process_alert(self, alert: AlertRecord) -> None:
+        """Main entry point - call this for each new alert.
+
+        Safe to call from any thread. Fast: returns after bookkeeping;
+        regeneration happens asynchronously via the debounce timer.
+        """
+        # Validate source IP
+        src_ip = (alert.src_ip or "").strip()
+        if src_ip in self._INVALID_SOURCE_IPS:
+            log.warning(
+                "Dropping alert with invalid source IP '%s' (sig=%s)",
+                src_ip, alert.signature,
+            )
+            return
+
+        arrival_time = time.time()
+        attack_type = extract_attack_type(alert.signature, alert.signature_id)
+        group_key = self._compute_group_key(src_ip, attack_type)
+
+        with self._lock:
+            # Check if there's an open incident for this group key
+            incident = self._open_incidents.get(group_key)
+
+            if incident is not None:
+                # Check if the existing incident has effectively expired
+                # (may happen if sweeper hasn't caught up yet)
+                silence = arrival_time - incident.last_activity_at
+                if silence > self.time_window_seconds:
+                    log.debug(
+                        "Incident %s expired (silence=%.1fs), closing before appending",
+                        incident.incident_id, silence,
+                    )
+                    self._close_incident_locked(incident, final=True)
+                    incident = None
+
+            if incident is None:
+                # Create a new incident
+                incident = self._create_incident_locked(
+                    src_ip=src_ip,
+                    attack_type=attack_type if self.grouping_mode == "per_attack_type" else None,
+                    group_key=group_key,
+                    arrival_time=arrival_time,
+                )
+
+            # Append the alert
+            incident.add_alert(alert, arrival_time)
+
+            log.debug(
+                "Alert added to incident %s (src=%s, sig=%s, count=%d)",
+                incident.incident_id, src_ip, alert.signature, incident.alert_count,
+            )
+
+            # Reset the debounce timer
+            self._reset_debounce_timer_locked(incident)
+
+    def force_regenerate_all(self) -> int:
+        """Immediately regenerate all in-memory incidents, bypassing debounce.
+
+        Regenerates BOTH open and recently-closed incidents. Useful when the
+        operator changes the prompt / model / config and wants to re-run
+        classification against incidents that have already closed (which
+        otherwise live in `_recently_closed` until evicted by the sweeper).
+
+        Returns the count of incidents for which regeneration was triggered.
+        """
+        with self._lock:
+            open_incidents = list(self._open_incidents.values())
+            closed_incidents = list(self._recently_closed.values())
+            # Cancel pending debounce timers for open incidents only
+            # (closed ones don't have active timers)
+            for inc in open_incidents:
+                timer = self._debounce_timers.pop(inc.incident_id, None)
+                if timer is not None:
+                    try:
+                        timer.cancel()
+                    except Exception:
+                        pass
+
+        # Fire regenerations outside the lock
+        all_incidents = open_incidents + closed_incidents
+        for inc in all_incidents:
+            self._trigger_regenerate(inc.incident_id)
+
+        log.info(
+            "force_regenerate_all triggered for %d incidents "
+            "(%d open + %d recently-closed)",
+            len(all_incidents), len(open_incidents), len(closed_incidents),
+        )
+        return len(all_incidents)
+
+    def get_open_incidents(self) -> List[Incident]:
+        """Return a snapshot list of currently open incidents."""
+        with self._lock:
+            # Return shallow copies so callers don't see later mutations.
+            # Alerts list is still shared, but alerts themselves are frozen.
+            return list(self._open_incidents.values())
+
+    def is_repeat_offender(self, source_ip: str) -> bool:
+        """Whether this source IP has been seen before in this session.
+
+        An IP is a "repeat offender" if it has been the source of more than
+        one incident this session, i.e. we've already opened an earlier
+        incident for it. Checked at report-generation time, not grouping time.
+
+        The first incident from an IP returns False (count == 1); the second
+        and later incidents return True (count >= 2).
+        """
+        with self._lock:
+            count = self._incident_count_by_ip.get(source_ip, 0)
+            verdict = count > 1
+            log.debug(
+                "is_repeat_offender(%s) -> %s (session_incident_count=%d)",
+                source_ip, verdict, count,
+            )
+            return verdict
+
+    def clear_all_incidents(self) -> int:
+        """Drop ALL in-memory incident state for the current session.
+
+        Cancels every pending debounce timer, shuts down the per-incident
+        regeneration executors, forgets all open and recently-closed
+        incidents, and resets the repeat-offender counter. Backs the dashboard
+        "Clear Incidents" action: without this, a debounce timer or the
+        sweeper would regenerate a just-cleared incident straight back onto
+        disk.
+
+        Returns the number of incidents (open + recently-closed) dropped.
+        """
+        with self._lock:
+            # Cancel pending debounce timers so nothing regenerates.
+            for timer in self._debounce_timers.values():
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
+            self._debounce_timers.clear()
+
+            # Shut down the per-incident regen executors. wait=False: a job may
+            # be mid-flight (already past the lock) - we just stop accepting and
+            # queuing new ones.
+            for ex in self._regen_executors.values():
+                try:
+                    ex.shutdown(wait=False)
+                except Exception:
+                    pass
+            self._regen_executors.clear()
+
+            dropped = len(self._open_incidents) + len(self._recently_closed)
+
+            self._open_incidents.clear()
+            self._recently_closed.clear()
+            self._incident_count_by_ip.clear()
+
+        log.info(
+            "Cleared all in-memory incident state (%d incident(s) dropped)",
+            dropped,
+        )
+        return dropped
+
+    def get_alerts_for_ip(
+        self,
+        source_ip: str,
+        since_epoch: Optional[float] = None,
+    ) -> List[AlertRecord]:
+        """Return all alerts from a source IP across open + recently-closed incidents.
+
+        Used by the agentic ReAct tools (get_alert_history) to assess prior
+        activity from an attacker IP. Reads through the public API rather than
+        accessing private state directly.
+
+        Args:
+            source_ip:    the attacker IP to filter on
+            since_epoch:  if set, only include alerts with
+                          timestamp_epoch >= since_epoch (POSIX seconds).
+                          A value of 0.0 in an alert is treated as "unknown"
+                          and is excluded from filtered results.
+
+        Returns: list of AlertRecord (may be empty). Lock-protected snapshot;
+        the caller can iterate freely.
+        """
+        out: List[AlertRecord] = []
+        with self._lock:
+            buckets: List[Incident] = []
+            buckets.extend(self._open_incidents.values())
+            buckets.extend(self._recently_closed.values())
+
+            for incident in buckets:
+                if incident.source_ip != source_ip:
+                    continue
+                for alert in incident.alerts:
+                    if since_epoch is not None:
+                        if alert.timestamp_epoch <= 0 or alert.timestamp_epoch < since_epoch:
+                            continue
+                    out.append(alert)
+        return out
+
+    def get_incident_count_for_ip(self, source_ip: str) -> int:
+        """Count of open + recently-closed incidents involving this source IP.
+
+        Used by get_alert_history tool to surface incident-level recurrence
+        distinct from raw alert volume.
+        """
+        with self._lock:
+            count = 0
+            for incident in self._open_incidents.values():
+                if incident.source_ip == source_ip:
+                    count += 1
+            for incident in self._recently_closed.values():
+                if incident.source_ip == source_ip:
+                    count += 1
+            return count
+
+    def get_all_incidents(self) -> List[Incident]:
+        """Snapshot of all in-memory incidents: open + recently-closed.
+
+        Used by the agentic ReAct tools (get_attack_pattern_stats) to
+        aggregate across both currently-open incidents and incidents that
+        have closed within the current session but are still cached in
+        memory for final regeneration.
+
+        Returns a list; the caller can iterate freely. Alert lists inside
+        each Incident remain shared references, but Incidents themselves
+        are append-only via add_alert() so concurrent iteration is safe
+        for read-only purposes.
+        """
+        with self._lock:
+            out = list(self._open_incidents.values())
+            out.extend(self._recently_closed.values())
+            return out
+
+    # ------------------------------------------------------------------
+    # Internal: grouping
+    # ------------------------------------------------------------------
+
+    def _compute_group_key(self, src_ip: str, attack_type: Optional[str]) -> str:
+        """Compute the group key used to look up open incidents."""
+        if self.grouping_mode == "per_attack_type":
+            return f"{src_ip}|{attack_type or ''}"
+        return src_ip  # per_actor
+
+    def _create_incident_locked(
+        self,
+        src_ip: str,
+        attack_type: Optional[str],
+        group_key: str,
+        arrival_time: float,
+    ) -> Incident:
+        """Create a new incident. Must be called with self._lock held."""
+        incident = Incident(
+            incident_id=str(uuid.uuid4()),
+            source_ip=src_ip,
+            attack_type=attack_type,
+            created_at=arrival_time,
+            last_activity_at=arrival_time,
+            status="open",
+        )
+        self._open_incidents[group_key] = incident
+
+        # Track how many incidents this IP has been the source of. The second
+        # incident (count == 2) is what flips the repeat_offender flag.
+        self._incident_count_by_ip[src_ip] = (
+            self._incident_count_by_ip.get(src_ip, 0) + 1
+        )
+
+        log.info(
+            "Incident %s opened (src=%s, attack_type=%s, mode=%s, "
+            "session_incident_count_for_ip=%d)",
+            incident.incident_id, src_ip, attack_type or "-", self.grouping_mode,
+            self._incident_count_by_ip[src_ip],
+        )
+        return incident
+
+    def _close_incident_locked(self, incident: Incident, final: bool) -> None:
+        """Mark an incident closed and remove from open dict.
+
+        Must be called with self._lock held.
+        If final=True, fire a final regeneration after releasing the lock.
+        """
+        if incident.status == "closed":
+            return
+
+        incident.status = "closed"
+
+        # Remove from open dict
+        group_key = self._compute_group_key(
+            incident.source_ip,
+            incident.attack_type if self.grouping_mode == "per_attack_type" else "",
+        )
+        self._open_incidents.pop(group_key, None)
+
+        # Keep a reference so workers doing a final regen can still find
+        # the incident by ID. Evicted later by the sweeper.
+        self._recently_closed[incident.incident_id] = incident
+
+        # Cancel any pending debounce timer for this incident
+        timer = self._debounce_timers.pop(incident.incident_id, None)
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+
+        log.info(
+            "Incident %s closed (alert_count=%d, final=%s)",
+            incident.incident_id, incident.alert_count, final,
+        )
+
+
+    def _close_all_open_incidents(self, final: bool) -> None:
+        """Close every open incident. Used on shutdown."""
+        with self._lock:
+            to_close = list(self._open_incidents.values())
+            for inc in to_close:
+                self._close_incident_locked(inc, final=final)
+
+        # Trigger final regenerations outside the lock
+        if final:
+            for inc in to_close:
+                # Direct synchronous call - this is shutdown, we want it done
+                self._trigger_regenerate_sync(inc)
+
+    # ------------------------------------------------------------------
+    # Internal: debounce
+    # ------------------------------------------------------------------
+
+    def _reset_debounce_timer_locked(self, incident: Incident) -> None:
+        """Cancel any existing debounce timer and start a fresh one.
+
+        Must be called with self._lock held.
+        """
+        # Cancel existing
+        existing = self._debounce_timers.pop(incident.incident_id, None)
+        if existing is not None:
+            try:
+                existing.cancel()
+            except Exception:
+                pass
+
+        # Schedule new
+        timer = threading.Timer(
+            self.debounce_seconds,
+            self._debounce_fired,
+            args=(incident.incident_id,),
+        )
+        timer.daemon = True
+        timer.name = f"debounce-{incident.incident_id[:8]}"
+        self._debounce_timers[incident.incident_id] = timer
+        timer.start()
+
+        log.debug(
+            "Debounce timer (re)set for incident %s (%.1fs)",
+            incident.incident_id, self.debounce_seconds,
+        )
+
+    def _debounce_fired(self, incident_id: str) -> None:
+        """Called when a debounce timer fires. Triggers regeneration."""
+        with self._lock:
+            # Remove the timer entry (it just fired)
+            self._debounce_timers.pop(incident_id, None)
+
+            # Check the incident is still open
+            incident = None
+            for inc in self._open_incidents.values():
+                if inc.incident_id == incident_id:
+                    incident = inc
+                    break
+
+            if incident is None:
+                log.debug(
+                    "Debounce fired for %s but incident is no longer open - skipping",
+                    incident_id,
+                )
+                return
+
+        # Trigger regeneration outside the lock
+        self._trigger_regenerate(incident_id)
+
+    # ------------------------------------------------------------------
+    # Internal: regeneration
+    # ------------------------------------------------------------------
+
+    def _trigger_regenerate(self, incident_id: str) -> None:
+        """Submit a regeneration job to the per-incident executor.
+
+        The executor has max_workers=1 so jobs run one at a time; any follow-up
+        submitted while one is already running queues automatically.
+        """
+        with self._lock:
+            if incident_id not in self._regen_executors:
+                self._regen_executors[incident_id] = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix=f"regen-{incident_id[:8]}"
+                )
+            executor = self._regen_executors[incident_id]
+
+        executor.submit(self._regenerate_worker, incident_id)
+
+    def _regenerate_worker(self, incident_id: str) -> None:
+        """Worker called by the per-incident executor."""
+        incident = self._find_incident(incident_id)
+        if incident is None:
+            log.warning("Regen worker: incident %s not found, skipping", incident_id)
+            return
+
+        cb = self._on_regenerate
+        if cb is None:
+            log.warning("Regen worker: no callback set, skipping")
+            return
+
+        with self._lock:
+            incident.report_version += 1
+
+        log.info(
+            "Regenerating incident %s (v%d, alerts=%d, status=%s)",
+            incident_id, incident.report_version, incident.alert_count, incident.status,
+        )
+
+        try:
+            cb(incident)
+        except Exception as e:
+            log.exception("Regen callback raised for incident %s: %s", incident_id, e)
+
+    def _trigger_regenerate_sync(self, incident: Incident) -> None:
+        """Synchronous regeneration used during shutdown.
+
+        Does not spawn a thread, does not queue follow-ups. Just fires
+        the callback once with whatever state the incident has.
+        """
+        cb = self._on_regenerate
+        if cb is None:
+            return
+        try:
+            incident.report_version += 1
+            cb(incident)
+        except Exception as e:
+            log.exception("Shutdown regen failed for %s: %s", incident.incident_id, e)
+
+    def _find_incident(self, incident_id: str) -> Optional[Incident]:
+        """Look up an incident by ID, whether open or recently closed."""
+        with self._lock:
+            # Check open incidents first
+            for inc in self._open_incidents.values():
+                if inc.incident_id == incident_id:
+                    return inc
+            # Fall back to recently-closed cache (so final regens succeed)
+            return self._recently_closed.get(incident_id)
+
+    # ------------------------------------------------------------------
+    # Internal: sweeper
+    # ------------------------------------------------------------------
+
+    def _sweep_loop(self) -> None:
+        """Background loop that closes expired incidents.
+
+        Runs independently of alert arrivals - catches incidents that would
+        otherwise linger because no new alerts are coming in to trigger the
+        expiry check in process_alert().
+        """
+        while not self._stop_event.is_set():
+            try:
+                self._sweep_once()
+            except Exception as e:
+                log.exception("Sweeper raised: %s", e)
+
+            # Wait, but bail out quickly on stop
+            self._stop_event.wait(timeout=self.sweep_interval_seconds)
+
+    def _sweep_once(self) -> None:
+        """Close any incidents whose time window has expired. Also evict stale
+        recently-closed entries to bound memory."""
+        now = time.time()
+        expired: List[Incident] = []
+
+        # Entries older than this are removed from recently_closed.
+        # Must outlast the time needed for the final regen to complete
+        # (LLM call + storage write), plus a safety margin.
+        recently_closed_ttl = max(300.0, self.time_window_seconds * 2)
+
+        with self._lock:
+            # 1. Close open incidents whose window expired
+            for inc in list(self._open_incidents.values()):
+                silence = now - inc.last_activity_at
+                if silence > self.time_window_seconds:
+                    expired.append(inc)
+                    self._close_incident_locked(inc, final=True)
+
+            # 2. Evict stale entries from recently_closed
+            to_evict = [
+                iid for iid, inc in self._recently_closed.items()
+                if (now - inc.last_activity_at) > recently_closed_ttl
+            ]
+            for iid in to_evict:
+                self._recently_closed.pop(iid, None)
+                ex = self._regen_executors.pop(iid, None)
+                if ex is not None:
+                    ex.shutdown(wait=False)
+            if to_evict:
+                log.debug("Evicted %d stale closed incidents", len(to_evict))
+
+        # Trigger final regenerations outside the lock
+        for inc in expired:
+            log.info("Sweeper closed incident %s", inc.incident_id)
+            self._trigger_regenerate(inc.incident_id)

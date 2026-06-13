@@ -2,82 +2,420 @@
 """
 app.py - Entrypoint: loads app.config, wires modules, starts the server.
 
-Resolution order for sensitive values (e.g. api_key):
-  1. Environment variable
+Startup order (matters - each step assumes the previous ones completed):
+  1. Parse config and set up logging
+  2. Create all objects (no starts yet)
+  3. Wire callbacks between them
+  4. Start background services (IncidentManager sweeper, LogMonitor tail)
+  5. server.run()  - blocks until Ctrl+C
+
+Resolution order for sensitive/environment values:
+  1. Environment variable (e.g. EVE_LOG_PATH, LOCAL_MODEL_URL)
   2. app.config value
+  3. Hardcoded default
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import signal
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
 from log_monitor import LogMonitor
 from web_server import Server
-from ai_module import AIAnalyzer
-from model_provider import ModelConfig, ProviderType, create_provider
+from model_provider import ModelConfig, ModelProvider, ProviderType, create_provider
+from incident_manager import IncidentManager
+from report_generator import ReportGenerator
+from report_db import ReportDatabase
 
-# Load config file
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+
+for mod in (
+    "model_provider", "log_monitor",
+    "incident_manager", "report_generator", "report_db", "web_server",
+):
+    logging.getLogger(mod).setLevel(logging.INFO)
+
+log = logging.getLogger("app")
+
+
+# ---------------------------------------------------------------------------
+# Config loading
+# ---------------------------------------------------------------------------
+
 _CONFIG_PATH = Path(__file__).parent.parent / "app.config"
 
 if not _CONFIG_PATH.exists():
-    print(f"[app] ERROR: config file not found at {_CONFIG_PATH}", file=sys.stderr)
+    log.error("config file not found at %s", _CONFIG_PATH)
     sys.exit(1)
 
 with open(_CONFIG_PATH, "rb") as _f:
     _cfg = tomllib.load(_f)
+
 
 def _get(section: str, key: str, fallback=None):
     """Retrieve a value from the parsed config, with an optional fallback."""
     return _cfg.get(section, {}).get(key, fallback)
 
 
+# ---------------------------------------------------------------------------
 # Server config
+# ---------------------------------------------------------------------------
+
 HOST       = _get("server", "host",       "0.0.0.0")
 PORT       = int(_get("server", "port",   5000))
 SECRET     = _get("server", "secret_key", "suricata-dashboard")
 
-# Monitor config
-EVE_LOG       = _get("monitor", "eve_log",       "/var/log/suricata/eve.json")
+
+# ---------------------------------------------------------------------------
+# Monitor config (EVE_LOG_PATH env var takes precedence)
+# ---------------------------------------------------------------------------
+
+EVE_LOG       = os.getenv("EVE_LOG_PATH") or _get("monitor", "eve_log", "/var/log/suricata/eve.json")
 POLL_INTERVAL = float(_get("monitor", "poll_interval", 0.5))
 
-# Model config
-_model_cfg     = _cfg.get("model", {})
-_provider_name = _model_cfg.get("provider", "ollama").lower()
-_provider_type = ProviderType(_provider_name)
 
-# Load the provider-specific sub-section
-_provider_cfg  = _cfg.get("model", {}).get(_provider_name, {})
-_model_name    = _provider_cfg.get("model_name", "")
-_api_key = os.getenv("API_KEY") or _provider_cfg.get("api_key", "")
+# ---------------------------------------------------------------------------
+# Suricata process check (Linux only)
+# ---------------------------------------------------------------------------
+
+REQUIRE_SURICATA      = bool(_get("suricata", "require_running", True))
+SURICATA_PROCESS_NAME = str(_get("suricata", "process_name", "suricata"))
+
+
+def _check_suricata_running(process_name: str) -> None:
+    """ Ensure the Suricata IDS process is running before startup.
+        Calls sys.exit(1) if Suricata isn't found. """
+    if not sys.platform.startswith("linux"):
+        log.info("Suricata check skipped (platform '%s' is not Linux)", sys.platform)
+        return
+
+    try:
+        result = subprocess.run(
+            ["pgrep", "-fi", process_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        log.warning("Cannot verify Suricata: 'pgrep' not found on PATH - skipping check")
+        return
+
+    if result.returncode != 0:
+        log.error("Suricata process '%s' is not running", process_name)
+        sys.exit(1)
+
+    log.info("Suricata process '%s' is running", process_name)
+
+
+if REQUIRE_SURICATA:
+    _check_suricata_running(SURICATA_PROCESS_NAME)
+
+
+# ---------------------------------------------------------------------------
+# Incident pipeline config
+# ---------------------------------------------------------------------------
+
+GROUPING_MODE         = _get("incident", "grouping_mode", "per_actor")
+TIME_WINDOW_MINUTES   = float(_get("incident", "time_window_minutes", 2.0))
+DEBOUNCE_SECONDS      = float(_get("incident", "debounce_seconds", 3.0))
+SWEEP_INTERVAL        = float(_get("incident", "sweep_interval_seconds", 10.0))
+
+# Sanity-check grouping_mode (IncidentManager would raise otherwise, but nicer
+# to catch it early with a readable message)
+if GROUPING_MODE not in ("per_actor", "per_attack_type"):
+    log.warning(
+        "Invalid grouping_mode '%s' in config, defaulting to 'per_actor'",
+        GROUPING_MODE,
+    )
+    GROUPING_MODE = "per_actor"
+
+
+# ---------------------------------------------------------------------------
+# Analysis config
+# ---------------------------------------------------------------------------
+
+_analysis_cfg       = _cfg.get("analysis", {})
+INCLUDE_LAB_CONTEXT = bool(_analysis_cfg.get("include_lab_context", True))
+SUMMARY_MODE        = _analysis_cfg.get("summary_mode", "llm")
+MAX_RETRIES         = int(_analysis_cfg.get("max_retries", 1))
+
+
+# ---------------------------------------------------------------------------
+# Agent config (Phase 4 - agentic ReAct loop)
+# ---------------------------------------------------------------------------
+
+_agent_cfg              = _cfg.get("agent", {})
+AGENT_MODE              = str(_agent_cfg.get("mode", "single_shot")).lower()
+AGENT_MAX_ITERATIONS    = int(_agent_cfg.get("max_iterations", 3))
+AGENT_TOOL_TIMEOUT      = float(_agent_cfg.get("tool_timeout_seconds", 5.0))
+AGENT_TOTAL_BUDGET      = float(_agent_cfg.get("total_budget_seconds", 30.0))
+AGENT_AUTO_ENRICHMENT   = bool(_agent_cfg.get("auto_enrichment", True))
+
+_agent_tools_cfg        = _agent_cfg.get("tools", {})
+AGENT_TOOLS_ENABLED     = {
+    "get_alert_history":         bool(_agent_tools_cfg.get("get_alert_history", True)),
+    "lookup_environment_context": bool(_agent_tools_cfg.get("lookup_environment_context", True)),
+    "get_attack_pattern_stats":  bool(_agent_tools_cfg.get("get_attack_pattern_stats", True)),
+}
+
+# Environment lookup entries - list of dicts from [[agent.environment.entries]]
+_agent_env_cfg          = _agent_cfg.get("environment", {})
+AGENT_ENV_ENTRIES       = list(_agent_env_cfg.get("entries", []))
+
+if AGENT_MODE not in ("single_shot", "react"):
+    log.warning("Invalid agent.mode '%s' - defaulting to 'single_shot'", AGENT_MODE)
+    AGENT_MODE = "single_shot"
+
+
+# ---------------------------------------------------------------------------
+# Model config
+# ---------------------------------------------------------------------------
+
+_model_cfg      = _cfg.get("model", {})
+_provider_str   = _model_cfg.get("provider", ProviderType.OLLAMA.value)
+_provider_type  = ProviderType(_provider_str)
+_provider_cfg   = _model_cfg.get(_provider_str, {})
+_model_name     = _provider_cfg.get("model_name", "")
 
 model_config = ModelConfig(
     provider        = _provider_type,
     model           = _model_name,
     max_tokens      = int(_model_cfg.get("max_tokens",  1024)),
-    temperature     = float(_model_cfg.get("temperature", 0.2)),
+    temperature     = float(_model_cfg.get("temperature", 0.0)),
     system_prompt   = _model_cfg.get("system_prompt") or None,
-    api_key         = _api_key,
     base_url        = _provider_cfg.get("base_url", ""),
     request_timeout = int(_provider_cfg.get("request_timeout", 120)),
 )
 
+
+# ---------------------------------------------------------------------------
+# Object creation (no side effects yet)
+# ---------------------------------------------------------------------------
+
 monitor = LogMonitor(eve_log_path=EVE_LOG, poll_interval=POLL_INTERVAL)
 server  = Server(host=HOST, port=PORT, secret_key=SECRET)
 
+# Storage: SQLite-backed ReportDatabase. The legacy JSON-file backend was
+# dropped because the SQLite layer covered every consumer with one less moving
+# part. Schema bootstrap is idempotent; the file is created if missing.
+_storage_cfg = _cfg.get("storage", {}) or {}
+STORAGE_DB_PATH = str(_storage_cfg.get("db_path", "data/reports.db"))
+STORAGE_RETENTION_DAYS = int(_storage_cfg.get("retention_days", 90) or 0)
+STORAGE_CLEANUP_INTERVAL = float(_storage_cfg.get("cleanup_interval_seconds", 3600) or 0.0)
+
+_db_path = Path(STORAGE_DB_PATH)
+if not _db_path.is_absolute():
+    _db_path = Path(__file__).parent.parent / _db_path
+storage = ReportDatabase(
+    db_path=str(_db_path),
+    retention_days=STORAGE_RETENTION_DAYS,
+)
+log.info(
+    "Storage: SQLite at %s (retention=%d days)",
+    _db_path, STORAGE_RETENTION_DAYS,
+)
+
+# Incident manager starts with no callback; we set it after creating the generator
+incident_manager = IncidentManager(
+    grouping_mode=GROUPING_MODE,
+    time_window_minutes=TIME_WINDOW_MINUTES,
+    debounce_seconds=DEBOUNCE_SECONDS,
+    sweep_interval_seconds=SWEEP_INTERVAL,
+    on_regenerate=None,
+)
+
+log.info(
+    "Incident pipeline: mode=%s, window=%.1fmin, debounce=%.1fs",
+    GROUPING_MODE, TIME_WINDOW_MINUTES, DEBOUNCE_SECONDS,
+)
+
+
+# ---------------------------------------------------------------------------
+# Provider + AI wiring (non-fatal if Ollama is unreachable at startup)
+# ---------------------------------------------------------------------------
+
+report_generator = None
+
 try:
     provider = create_provider(model_config)
-    analyser = AIAnalyzer(provider)
-    server.set_analyser(analyser)
-    print(f"[app] model provider : {model_config.provider.value}")
-    print(f"[app] model          : {model_config.model}")
-except Exception as e:
-    print(f"[app] AI analysis disabled: {e}")
 
+    # Build the ReActAgent if requested. Done in a try-block so a misconfigured
+    # tool registry doesn't block the rest of the pipeline - single-shot
+    # fallback keeps the system useful.
+    react_agent = None
+    if AGENT_MODE == "react":
+        try:
+            from tool_registry import ToolRegistry
+            from agent_tools import (
+                make_alert_history_tool,
+                make_environment_lookup_tool,
+                make_pattern_stats_tool,
+            )
+            from react_agent import ReActAgent
+
+            tool_registry = ToolRegistry()
+
+            if AGENT_TOOLS_ENABLED.get("get_alert_history", True):
+                tool_registry.register(
+                    make_alert_history_tool(incident_manager, storage),
+                )
+            if AGENT_TOOLS_ENABLED.get("lookup_environment_context", True):
+                tool_registry.register(
+                    make_environment_lookup_tool(AGENT_ENV_ENTRIES),
+                )
+            if AGENT_TOOLS_ENABLED.get("get_attack_pattern_stats", True):
+                tool_registry.register(
+                    make_pattern_stats_tool(incident_manager, storage),
+                )
+
+            react_agent = ReActAgent(
+                provider=provider,
+                tools=tool_registry,
+                max_iterations=AGENT_MAX_ITERATIONS,
+                tool_timeout_seconds=AGENT_TOOL_TIMEOUT,
+                total_budget_seconds=AGENT_TOTAL_BUDGET,
+                include_lab_context_in_fallback=INCLUDE_LAB_CONTEXT,
+                auto_enrichment=AGENT_AUTO_ENRICHMENT,
+            )
+            log.info(
+                "ReAct agent enabled: tools=%s, max_iter=%d, budget=%.0fs, auto_enrichment=%s",
+                tool_registry.list_names(), AGENT_MAX_ITERATIONS, AGENT_TOTAL_BUDGET,
+                AGENT_AUTO_ENRICHMENT,
+            )
+        except Exception as agent_err:  # noqa: BLE001 - degrade gracefully
+            log.warning(
+                "ReAct agent init failed (%s) - falling back to single_shot. "
+                "Set [agent].mode = 'single_shot' in app.config to silence this.",
+                agent_err,
+            )
+            react_agent = None
+
+    effective_agent_mode = "react" if react_agent is not None else "single_shot"
+
+    # New ReportGenerator for incidents
+    report_generator = ReportGenerator(
+        provider=provider,
+        storage=storage,
+        include_lab_context=INCLUDE_LAB_CONTEXT,
+        summary_mode=SUMMARY_MODE,
+        max_retries=MAX_RETRIES,
+        is_repeat_offender=incident_manager.is_repeat_offender,
+        on_report_ready=server.push_incident_report,
+        agent_mode=effective_agent_mode,
+        react_agent=react_agent,
+        # Pass env_entries so the rule-based suggestion generator and
+        # the LLM-suggestion filter keep working in single_shot mode -
+        # they derive facts deterministically from source_ip + env config
+        # when no reasoning trace exists.
+        env_entries=AGENT_ENV_ENTRIES,
+    )
+
+    # Wire IncidentManager -> ReportGenerator
+    incident_manager.set_regenerate_callback(report_generator.generate)
+
+    # Hook up the force-regenerate endpoint
+    server.set_incident_force_regenerate(incident_manager.force_regenerate_all)
+    server.set_incident_clear_all(storage.clear_all)
+    # Clearing must also drop the manager's in-memory incidents, else a
+    # pending debounce/sweep regenerates a cleared incident back onto disk.
+    server.set_incident_reset(incident_manager.clear_all_incidents)
+
+    # Phase 10: attach the storage backend so the Server can serve the
+    # history-query endpoints (/api/incidents/by-ip, /by-attack, /stats).
+    # Works for both SQLite (full feature set) and JSON (those endpoints
+    # return 503 - Server.set_storage falls back gracefully via hasattr).
+    server.set_storage(storage)
+
+    log.info("Model provider : %s", model_config.provider.value)
+    log.info("Model          : %s", model_config.model)
+    log.info("Agent mode     : %s", effective_agent_mode)
+    log.info("Lab context    : %s", INCLUDE_LAB_CONTEXT)
+    log.info("Summary mode   : %s", SUMMARY_MODE)
+
+except Exception as e:
+    log.warning(
+        "AI analysis disabled (provider/generator init failed): %s. "
+        "Dashboard will show alerts only.", e,
+    )
+    # Even without the AI, we keep the IncidentManager running so the
+    # dashboard can at least track alert groupings. It just won't
+    # produce reports (callback stays None -> IncidentManager logs and skips).
+
+
+# ---------------------------------------------------------------------------
+# Callback wiring
+# ---------------------------------------------------------------------------
+
+# Every alert goes to BOTH the server (raw alerts tab) and the incident manager
 monitor.subscribe(server.push_alert)
+monitor.subscribe(incident_manager.process_alert)
+
+
+# ---------------------------------------------------------------------------
+# Graceful shutdown
+# ---------------------------------------------------------------------------
+
+def _graceful_shutdown(signum, frame):
+    """Stop background services cleanly on Ctrl+C."""
+    log.info("Shutdown signal received - stopping services...")
+    try:
+        monitor.stop()
+    except Exception:
+        log.exception("Error stopping LogMonitor")
+
+    try:
+        # close_open=True means open incidents get a final regen before exit
+        incident_manager.stop(close_open=True)
+    except Exception:
+        log.exception("Error stopping IncidentManager")
+
+    # Phase 10: stop the retention sweeper if it was started.
+    if hasattr(storage, "stop_retention_sweeper"):
+        try:
+            storage.stop_retention_sweeper()
+        except Exception:
+            log.exception("Error stopping retention sweeper")
+
+    log.info("Shutdown complete")
+    sys.exit(0)
+
+
+# SIGINT is Ctrl+C; SIGTERM is the standard stop signal.
+# On Windows, SIGTERM isn't fully supported, but SIGINT works.
+signal.signal(signal.SIGINT, _graceful_shutdown)
+try:
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+except (AttributeError, ValueError):
+    # Windows may not support SIGTERM the same way
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # Start background services BEFORE the server.
+    # IncidentManager first so its sweeper is live when alerts arrive.
+    incident_manager.start()
     monitor.start()
+
+    # Phase 10: retention sweeper. Started only when the storage backend
+    # exposes start_retention_sweeper (SQLite does, JSON doesn't).
+    if hasattr(storage, "start_retention_sweeper"):
+        storage.start_retention_sweeper(STORAGE_CLEANUP_INTERVAL)
+
+    # Blocks until server stops (Ctrl+C triggers _graceful_shutdown above)
     server.run()
