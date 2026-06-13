@@ -6,6 +6,10 @@
 
 Reads Suricata IDS alerts from `eve.json`, groups them into incidents by source IP, runs an agentic ReAct loop (local LLM via Ollama with three enrichment tools) to classify each alert as a real attack or noise, generates a structured incident report, and displays everything on a live web dashboard. State is persisted to SQLite.
 
+## Demonstration
+
+A full deployment walkthrough is recorded in [`P000774CSITCP-deployment-demonstration.mp4`](P000774CSITCP-deployment-demonstration.mp4).
+
 ## Prerequisites
 
 | Tool | Version | Notes |
