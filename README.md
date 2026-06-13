@@ -8,7 +8,7 @@ Reads Suricata IDS alerts from `eve.json`, groups them into incidents by source 
 
 ## Demonstration
 
-A full deployment walkthrough is recorded in [`P000774CSITCP-deployment-demonstration.mp4`](P000774CSITCP-deployment-demonstration.mp4).
+A full deployment walkthrough is recorded in [`P000774CSITCP-deployment-demonstration.mp4`](https://raw.githubusercontent.com/dzipsin/p000774csitcp/refs/heads/main/P000774CSITCP-deployment-demonstration.mp4).
 
 ## Prerequisites
 
