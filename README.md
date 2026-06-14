@@ -27,6 +27,12 @@ A full deployment walkthrough is recorded in [`P000774CSITCP-deployment-demonstr
 
 ## Setup
 
+### 0. Network Identification & Preparation
+
+If DVWA is your intended monitoring target, refer to [`dvwa/README.md`](https://github.com/dzipsin/p000774csitcp/blob/main/dvwa/README.md) to set up DVWA.
+
+Otherwise, deploy your desired application and identify the network interface traffic will be passing through.
+
 ### 1. Suricata
 
 Install if not already present:
@@ -36,6 +42,7 @@ sudo apt update && sudo apt install -y suricata jq
 ```
 
 Identify the network interface to monitor (e.g., the Docker bridge for a containerised web app):
+> Note: If using docker, the network interface name can change between startups and should be checked and updated each time the app is started.
 
 ```bash
 ip link show type bridge
@@ -74,7 +81,7 @@ sudo systemctl restart suricata
 sudo grep "successfully loaded" /var/log/suricata/suricata.log | tail -1   # expect 71 rules
 ```
 
-Full rule reference, priority tiers, and per-payload test cases: `lab/suricata/README.md`.
+Full rule reference, priority tiers, and per-payload test cases: [`lab/suricata/README.md`](https://github.com/dzipsin/p000774csitcp/blob/main/lab/suricata/README.md).
 
 ### 2. Ollama
 
@@ -85,6 +92,12 @@ ollama pull qwen2.5:3b
 
 Ollama runs on `http://localhost:11434` by default. The model name is set in `app.config`.
 
+If running in a VM, it is recommended to run Ollama on the host machine for performance reasons. This will require you to set the environment variable `OLLAMA_HOST=0.0.0.0:11434` for Ollama to accept traffic from the VM, and to update `app.config`
+```toml
+[model.ollama]
+base_url        = "http://10.0.2.2:11434"
+```
+
 ### 3. Python Environment
 
 ```bash
@@ -92,6 +105,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+If running the program via `run.sh` (details below) then this step is not required.
 
 ---
 
@@ -163,6 +178,13 @@ retention_days = 90                  # 0 = keep forever
 ---
 
 ## Running
+
+```bash
+run.sh
+```
+> Note that `run.sh` will need to be set to executable mode with `chmod +x ./run.sh`
+
+Alternatively, if you wish to skip the suricata & dvwa bootup:
 
 ```bash
 source .venv/bin/activate
